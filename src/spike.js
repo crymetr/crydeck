@@ -4,7 +4,7 @@
 
 import { Terminal } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
-import { Unicode11Addon } from '@xterm/addon-unicode11';
+import { UnicodeGraphemesAddon } from '@xterm/addon-unicode-graphemes';
 import { WebglAddon } from '@xterm/addon-webgl';
 import { invoke, Channel } from '@tauri-apps/api/core';
 import '@xterm/xterm/css/xterm.css';
@@ -35,14 +35,16 @@ const fit = new FitAddon();
 term.loadAddon(fit);
 trace('fit addon ok');
 
-// Unicode 11 width tables. Will still not be perfect for emoji, that is expected.
+// Grapheme clustering, not just width tables. Unicode11Addon fixes wcwidth but
+// still counts a ZWJ sequence like a family emoji as several characters, and a
+// wrong width does not just look wrong, it displaces the whole rest of the line.
+// Observed with Unicode11: "width guesswork" rendered as "s r e y g".
 try {
-  const uni = new Unicode11Addon();
+  const uni = new UnicodeGraphemesAddon();
   term.loadAddon(uni);
-  term.unicode.activeVersion = '11';
-  trace('unicode11 ok');
+  trace(`unicode graphemes ok, active version ${term.unicode.activeVersion}`);
 } catch (e) {
-  trace(`unicode11 FAILED: ${e.message}`);
+  trace(`unicode graphemes FAILED: ${e.message}`);
 }
 
 term.open(document.getElementById('term'));
@@ -204,7 +206,20 @@ term.attachCustomKeyEventHandler((ev) => {
 
 // ---------------------------------------------------------------- torture
 
-document.getElementById('t-dump').onclick = () => {
+// These buttons type into whatever is running in the session, so if Claude is
+// up they land in its prompt rather than a shell. Impatient repeat clicking then
+// stacks N copies of the same command. Brief disable makes that obvious instead
+// of silent.
+function guard(id, fn) {
+  const el = document.getElementById(id);
+  el.onclick = () => {
+    el.disabled = true;
+    setTimeout(() => { el.disabled = false; }, 1500);
+    fn();
+  };
+}
+
+guard('t-dump', () => {
   stats.bytes = 0; stats.lastBytes = 0; stats.msgs = 0; stats.maxQueue = 0;
   idleTicks = 0;
   bench = { name: '100MB dump', t0: performance.now() };
@@ -212,13 +227,11 @@ document.getElementById('t-dump').onclick = () => {
   invoke('torture_dump', { id: sessionId, megabytes: 100 })
     .then((p) => trace(`dump file ready: ${p}`))
     .catch((e) => trace(`torture_dump FAILED: ${e}`));
-};
+});
 
-document.getElementById('t-unicode').onclick = () =>
-  invoke('torture_unicode', { id: sessionId });
+guard('t-unicode', () => invoke('torture_unicode', { id: sessionId }));
 
-document.getElementById('t-alt').onclick = () =>
-  invoke('torture_alt_screen', { id: sessionId });
+guard('t-alt', () => invoke('torture_alt_screen', { id: sessionId }));
 
 // Run claude inside the shell that is already up, rather than spawning it as a
 // process. On Windows `claude` on PATH is an extensionless npm shell script;
