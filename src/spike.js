@@ -220,13 +220,21 @@ document.getElementById('t-unicode').onclick = () =>
 document.getElementById('t-alt').onclick = () =>
   invoke('torture_alt_screen', { id: sessionId });
 
-document.getElementById('t-claude').onclick = () => spawn('claude', []);
+// Run claude inside the shell that is already up, rather than spawning it as a
+// process. On Windows `claude` on PATH is an extensionless npm shell script;
+// CreateProcessW does no PATHEXT resolution and rejects it with error 193.
+// Letting the shell resolve it is both correct and closer to real usage.
+// Phase 1 note: any "spawn a command" feature needs shell resolution, not a
+// raw CreateProcessW.
+document.getElementById('t-claude').onclick = () => {
+  if (sessionId === null) return;
+  invoke('pty_write', { id: sessionId, data: 'claude\r' });
+  term.focus();
+};
 
 document.getElementById('t-reset').onclick = () => spawn('powershell.exe', ['-NoLogo']);
 
-// Boot into a plain shell so the window is useful the moment it opens, then fire
-// the dump automatically. Spike-only: it means the throughput number exists
-// without anyone sitting there clicking a button.
-spawn('powershell.exe', ['-NoLogo']).then(() => {
-  setTimeout(() => document.getElementById('t-dump').click(), 2500);
-});
+// Boot into a plain shell so the window is useful the moment it opens.
+// The dump is on a button now, not on boot: auto-firing it made the window
+// unusable for the first minute of every launch.
+spawn('powershell.exe', ['-NoLogo']);

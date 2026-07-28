@@ -295,31 +295,38 @@ powerline  | \u{e0b0} \u{e0b1} \u{e0b2} \u{e0b3}          | needs a nerd font\n"
     s.writer.flush().map_err(|e| e.to_string())
 }
 
-/// Enter the alternate screen, draw, leave. The thing being tested is that the
-/// main buffer and scrollback come back intact, because that is what breaks when
-/// tab switching recreates an xterm instance.
+/// Enter the alternate screen, draw, leave. Tests that the main buffer and
+/// scrollback survive, which is what breaks when tab switching recreates an
+/// xterm instance.
+///
+/// An earlier version of this pushed the escape sequences straight into the
+/// output channel. Do not do that. ConPTY keeps its own model of the screen and
+/// emits diffs against it, so writing behind its back desyncs the two and every
+/// later redraw is computed from a wrong picture. It renders as glitching.
+/// The sequences have to originate from a real process inside the PTY.
 #[tauri::command]
 pub fn torture_alt_screen(state: tauri::State<'_, PtyState>, id: u32) -> Result<(), String> {
-    let sessions = state.sessions.lock().unwrap();
-    let s = sessions.get(&id).ok_or("no such session")?;
-    let out = s.output.clone();
-    drop(sessions);
+    let script = std::env::temp_dir().join("cockpit_altscreen.ps1");
+    let body = r#"$e = [char]27
+Write-Host "$e[?1049h$e[2J$e[H" -NoNewline
+Write-Host "$e[1;33m  ALTERNATE SCREEN  $e[0m"
+Write-Host ""
+Write-Host "  Scrollback behind this should be untouched."
+Write-Host "  Returning to the main buffer in 3 seconds..."
+Start-Sleep -Seconds 3
+Write-Host "$e[?1049l" -NoNewline
+Write-Host "$e[32m[alt screen exited]$e[0m"
+"#;
+    std::fs::write(&script, body).map_err(|e| e.to_string())?;
 
-    std::thread::spawn(move || {
-        let mut frame = String::new();
-        frame.push_str("\x1b[?1049h"); // enter alt screen
-        frame.push_str("\x1b[2J\x1b[H"); // clear, home
-        frame.push_str("\x1b[1;33m  ALTERNATE SCREEN  \x1b[0m\r\n\r\n");
-        frame.push_str("  Scrollback behind this should be untouched.\r\n");
-        frame.push_str("  Returning to the main buffer in 3 seconds...\r\n");
-        let _ = out.send(InvokeResponseBody::Raw(frame.into_bytes()));
-
-        std::thread::sleep(Duration::from_secs(3));
-
-        let _ = out.send(InvokeResponseBody::Raw(
-            b"\x1b[?1049l\r\n\x1b[32m[alt screen exited]\x1b[0m\r\n".to_vec(),
-        ));
-    });
-
-    Ok(())
+    let mut sessions = state.sessions.lock().unwrap();
+    let s = sessions.get_mut(&id).ok_or("no such session")?;
+    let cmd = format!(
+        "powershell -NoProfile -ExecutionPolicy Bypass -File \"{}\"\r",
+        script.display()
+    );
+    s.writer
+        .write_all(cmd.as_bytes())
+        .map_err(|e| e.to_string())?;
+    s.writer.flush().map_err(|e| e.to_string())
 }
