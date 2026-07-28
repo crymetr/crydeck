@@ -133,3 +133,74 @@ Only then: persisted layout, themes, search, installer.
 - **Nimbalyst** — kanban session management, worktree isolation, iOS companion.
 - **Claude Desktop (official)** — Code tab, parallel sessions with git isolation,
   drag-and-drop panes, visual diff review.
+- **claude-command-center** (nubbymong, MIT) — Electron + xterm.js + node-pty +
+  React/Zustand + better-sqlite3. Closest technical relative. Multi-session with
+  per-session isolated home dirs, tokenomics dashboard, transcript viewer,
+  2000+ tests, CI green on Windows. Explicitly has **no file tree and no preview
+  pane**: "the app treats sessions as first-class objects rather than files."
+  Steal: its status pipeline (statusLine hook -> **HTTP gateway**, plus
+  background transcript indexing, plus LiteLLM pricing JSON cached 24h).
+- **Nimbalyst** (MIT) — Electron + React + Monaco + Lexical + Excalidraw, embeds
+  **ghostty** as its terminal rather than building one. Much larger scope
+  (Kanban sessions, mobile companions, CF Worker sync). Not a model for us.
+
+Of the prior art, only Claudette is Tauri; the rest are Electron. None of them
+offers a file tree + preview + OS-open. That gap is the whole reason to build.
+
+---
+
+## Phase 0 results (2026-07-28)
+
+Toolchain: rustup 1.29 / rustc 1.97.1 stable-msvc + VS BuildTools 2022 (MSVC
+14.44, Windows SDK 10.0.26100). Neither was present beforehand.
+
+**Terminal works.** Unicode11 width tables load, WebGL renderer active, PTY
+spawns at 106x36, input and output both flow.
+
+**Throughput, 100MB dump through a real ConPTY:**
+
+```
+88.1MB in 54.9s = 1.6MB/s | 4497 ipc msgs (avg 20KB) | max write queue 3
+reader thread: read() 55.3s | send() 0.3s
+```
+
+The IPC bridge costs **0.5%** of wall clock. The reader thread lives entirely
+inside `read()`, so ConPTY paces us at roughly 20KB per 12ms tick. Even with
+zero rendering the dump would take ~55s. Tauri is not the bottleneck, and
+`node-pty` under Electron drives the same ConPTY API, so Electron would hit the
+identical ceiling.
+
+Max queue depth of 3 means xterm never backlogged and input stays responsive
+during a flood. 1.6MB/s is ~20k lines/sec of terminal text, far beyond anything
+Claude Code's TUI emits. A rare 10MB log cat costs ~6s.
+
+**Do not compare against `Measure-Command { cmd /c type }` in Windows Terminal.**
+That reported 100MB in 1.8s, but it times cmd.exe writing into the pty, not the
+terminal finishing its render. It is not an end-to-end number and the 40x gap it
+implies is an artifact.
+
+### Defects found
+
+1. **ConPTY never signals EOF when the child exits.** The master only reports EOF
+   when the pseudoconsole is closed. Reading until `Ok(0)` hangs forever, so
+   every closed session leaks a parked reader thread. Shutdown order must be:
+   kill process tree -> drop master -> reader unblocks. **Not yet fixed.**
+2. **Never inject escape sequences into the render path.** The first alt-screen
+   test wrote `?1049h` straight to the output channel. ConPTY models the screen
+   and emits diffs against that model, so writing behind its back desyncs the two
+   and everything after renders as glitch. Alt-screen sequences must originate
+   from a real process inside the PTY. Fixed.
+3. **`CreateProcessW` does no PATHEXT resolution.** `claude` on PATH is an
+   extensionless npm shell script and spawning it directly fails with os error
+   193. Same trap awaits `npm`, `pnpm`, `wrangler`. Any spawn feature must go
+   through shell resolution. Fixed in the spike by typing into the running shell.
+4. **Debug builds load `devUrl`, not `frontendDist`.** Running `app.exe` without
+   a vite server on 5173 gives a blank window and no JS at all.
+
+### Open
+
+- Release-build RAM. Debug measured **394MB across 8 processes**, nowhere near
+  the 40-60MB Tauri advertises. WebView2 forks renderer/GPU/network processes
+  much like Electron. If release is not meaningfully lighter, the main reason to
+  pay the Rust tax is gone.
+- Human feel test of the terminal under load.
