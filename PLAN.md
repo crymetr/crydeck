@@ -194,13 +194,41 @@ implies is an artifact.
    extensionless npm shell script and spawning it directly fails with os error
    193. Same trap awaits `npm`, `pnpm`, `wrangler`. Any spawn feature must go
    through shell resolution. Fixed in the spike by typing into the running shell.
-4. **Debug builds load `devUrl`, not `frontendDist`.** Running `app.exe` without
-   a vite server on 5173 gives a blank window and no JS at all.
+4. **Raw `cargo build` never embeds the frontend, in debug OR release.** Only the
+   Tauri CLI wires up `frontendDist`, so a plain `cargo build --release` produces
+   a binary that still points at `devUrl` and shows an Edge "localhost refused to
+   connect" page with no vite server running. Symptom is easy to misread as a
+   working app, and any measurement taken against it is measuring an error page.
+   Always build releases with `pnpm tauri build` (add `--no-bundle` to skip
+   installer generation).
+
+### Memory (release, real UI, one session)
+
+```
+                          working set    private
+WebView2 (6 processes)       399 MB       251 MB
+session shell (pwsh+conhost)  82 MB        52 MB
+app.exe (Rust core)           27 MB         5 MB
+                          ----------    ---------
+total                        508 MB       308 MB
+```
+
+Binary 8.63MB, release build 57s incremental.
+
+The session's own PowerShell is 52MB and you pay that in any terminal, so
+Cockpit's own cost is roughly **256MB private**. Of that, the Rust core is 5MB
+and WebView2 is everything else. A bare WebView2 rendering an error page already
+costs 212MB private, so xterm + WebGL adds only ~40MB on top of the floor.
+
+**Tauri's advertised 40-60MB does not survive a real app.** The Rust core really
+is nearly free, but the WebView is not, and Electron would swap WebView2 for
+bundled Chromium at similar or worse cost plus ~250MB of install. Conclusion:
+Tauri is marginally better than Electron here, not dramatically. It was worth
+staying on, not worth switching to. Expect ~250MB plus roughly 50MB per extra
+session, since additional sessions add a shell and a terminal buffer rather than
+another browser.
 
 ### Open
 
-- Release-build RAM. Debug measured **394MB across 8 processes**, nowhere near
-  the 40-60MB Tauri advertises. WebView2 forks renderer/GPU/network processes
-  much like Electron. If release is not meaningfully lighter, the main reason to
-  pay the Rust tax is gone.
 - Human feel test of the terminal under load.
+- ConPTY EOF thread leak (defect 1), scheduled for Phase 2 with the Job Objects.

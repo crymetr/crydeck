@@ -26,6 +26,10 @@ pub struct Session {
     master: Box<dyn MasterPty + Send>,
     writer: Box<dyn Write + Send>,
     child: Box<dyn Child + Send + Sync>,
+    /// Kept so a session can be written to out-of-band later (status lines,
+    /// notices). Nothing does that yet, and terminal content must never come
+    /// through here: writing behind ConPTY's back desyncs its screen model.
+    #[allow(dead_code)]
     output: Channel<InvokeResponseBody>,
     pid: Option<u32>,
 }
