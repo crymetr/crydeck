@@ -60,7 +60,68 @@ stdout and exit code unchanged. Native status bar ships opt-in.
 
 Transcript JSONL is a fallback only (undocumented, delayed, no authoritative rate limits).
 
-## Phases (each independently usable)
+## Design v2 (2026-07-28 rethink, after prior-art survey)
+
+Layout and scope unchanged. Four upgrades from studying Wave Terminal, OpenCockpit,
+opcode and claude-command-center:
+
+### 1. Hooks are the nervous system, not filesystem guessing
+
+The v1 plan inferred everything from the outside: FS watchers for changed files,
+git status for dirty marks, output scraping for state. But Claude Code will *tell*
+us what it did, per session, through its hook system. The Rust core runs a tiny
+localhost HTTP listener (loopback only, random port, random bearer token) and each
+tab's Claude session gets hooks + env (`COCKPIT_TAB_ID`, `COCKPIT_PORT`, token):
+
+- `statusLine` shim (proxy rule from v1 stands) -> bottom bar: context %, limits,
+  model, effort, cost.
+- `PostToolUse` on Edit/Write/NotebookEdit -> exact changed-file paths -> tree
+  highlighting + a per-tab "changed this session" feed. No watcher heuristics,
+  no polling, zero idle cost, and the highlight means "Claude touched this",
+  which is the question Sait is actually asking.
+- FS watcher demoted to fallback: refresh visible tree nodes only, so files
+  changed outside Claude (builds, installs) still appear, un-highlighted.
+- Git dirty marks stay (Phase 4) but become decoration, not the primary signal.
+
+Idea credit: claude-command-center's statusLine -> HTTP gateway pipeline.
+Hook config is injected per-session via `--settings` flag pointing at a generated
+tab-local settings file. Never write the user's settings.json.
+
+### 2. Preview pane = three swappable views (Wave's block idea, minus the framework)
+
+Wave Terminal treats terminals, file previews and web views as interchangeable
+blocks in a layout. We don't need the layout engine, but the pane gets three view
+modes with a segmented switcher:
+
+- **File** — read-only CodeMirror 6 + image/markdown/svg rendering (as v1).
+- **App** — an interactive web view for localhost URLs. Real, clickable, usable.
+  iframe first; Tauri child-webview upgrade only if frame-blocking headers bite.
+- **Feed** — what Claude produced this session: files created (from PostToolUse),
+  localhost URLs and links (regex over the PTY stream, OSC 8 aware). Newest first,
+  one tap opens it in File/App view or the OS default app. This is the "open what
+  Claude points at" requirement made concrete: the app never auto-loads a URL the
+  terminal emitted (untrusted), it surfaces them one tap away.
+
+Tree click -> File view. Detected dev server -> badge on the App view. Per-tab state.
+
+### 3. The shell itself is intelligent
+
+The session shell is pwsh 7 with PSReadLine Predictive IntelliSense turned on via
+a cockpit-owned profile snippet (`-NoProfile` + our own dot-sourced init, so the
+user's profile is never edited): `PredictionSource HistoryAndPlugin`, ListView on
+F2, inline ghost text. Costs nothing, ships intelligence Windows already has.
+Claude runs inside that shell (shell resolves the shim, per Phase 0 defect 3).
+
+### 4. Confirmed non-goals (validated by the graveyard)
+
+opcode (ex-Claudia, most-starred Claude GUI) is unmaintained; OpenCockpit went
+client-server web app; Nimbalyst went kanban+mobile. Everything that grew a
+conversation UI, an editor, or team features either died or got heavy. The moat
+stays: PTY-true terminal + tree + preview + OS-open, nothing else. We wrap the
+real TUI rather than rebuilding chat on the Agent SDK — the TUI is the product,
+SDK rebuilds chase a moving target.
+
+
 
 ### Phase 0 — spikes (throwaway, go/no-go gate)
 - Install rustup + MSVC build tools.
@@ -81,8 +142,11 @@ Terminal state preserved across tab switches — never recreate the xterm instan
 Cap at 6 active sessions.
 
 ### Phase 3 — preview + change awareness
+Hook gateway (HTTP listener + per-tab settings injection) lands here — it feeds both
+this phase and Phase 5. PostToolUse -> changed-file highlighting + Feed view.
 One shared read-only CodeMirror 6 instance (NOT Monaco), showing the active tab's file.
-Lazy filesystem watching. Refresh only visible nodes. Refuse binaries and huge files.
+App view (iframe) for detected localhost URLs. Lazy filesystem watching as fallback.
+Refresh only visible nodes. Refuse binaries and huge files.
 
 ### Phase 4 — git decoration
 Repo discovery, cached `git status --porcelain=v2 -z` debounced 1-2s per repo (not per

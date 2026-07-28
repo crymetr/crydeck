@@ -1,3 +1,5 @@
+mod fs;
+mod hooks;
 mod pty;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -10,9 +12,13 @@ pub fn run() {
       pty::pty_resize,
       pty::pty_kill,
       pty::bench_report,
-      pty::torture_dump,
-      pty::torture_unicode,
-      pty::torture_alt_screen,
+      fs::fs_list,
+      fs::fs_read,
+      fs::os_open,
+      fs::os_explore,
+      fs::pick_folder,
+      fs::boot_folder,
+      hooks::gateway_info,
     ])
     .setup(|app| {
       if cfg!(debug_assertions) {
@@ -21,6 +27,14 @@ pub fn run() {
             .level(log::LevelFilter::Info)
             .build(),
         )?;
+      }
+      // The gateway must be up before any shell spawns, since every session's
+      // hook shims are generated with this run's port and token.
+      let gw = hooks::start(app.handle().clone())
+        .map_err(|e| std::io::Error::other(format!("hook gateway: {e}")))?;
+      {
+        use tauri::Manager;
+        app.manage(gw);
       }
       Ok(())
     })

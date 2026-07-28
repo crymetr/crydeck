@@ -2,33 +2,161 @@
 <html lang="en">
 <head>
 <meta charset="utf-8" />
-<title>Cockpit PTY spike</title>
+<title>Cockpit</title>
 <style>
-  html, body { margin: 0; height: 100%; background: #0d0d10; color: #d8d8de;
-    font: 12px/1.4 "Segoe UI", system-ui, sans-serif; overflow: hidden; }
-  #app { display: flex; flex-direction: column; height: 100%; }
-  #bar { display: flex; gap: 6px; align-items: center; padding: 6px 8px;
-    background: #16161c; border-bottom: 1px solid #26262f; flex: 0 0 auto; }
-  button { background: #23232c; color: #d8d8de; border: 1px solid #35353f;
-    border-radius: 4px; padding: 4px 9px; font: inherit; cursor: pointer; }
-  button:hover { background: #2d2d38; }
-  #stats { margin-left: auto; font-family: "Cascadia Mono", Consolas, monospace;
-    font-size: 11px; color: #8a8a96; white-space: pre; }
-  #term { flex: 1 1 auto; min-height: 0; padding: 4px 0 0 6px; }
+  :root {
+    --bg: #0d0d10; --bg2: #16161c; --bg3: #1c1c24; --line: #26262f;
+    --fg: #d8d8de; --dim: #8a8a96; --accent: #4d9fff; --changed: #e2b93d;
+    --tree-w: 230px; --preview-w: 420px;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; background: var(--bg); color: var(--fg);
+    font: 12px/1.45 "Segoe UI", system-ui, sans-serif; overflow: hidden;
+    user-select: none; }
+  #app { display: grid; height: 100%;
+    grid-template-rows: 34px 1fr 26px;
+    grid-template-columns: var(--tree-w) 4px 1fr 4px var(--preview-w);
+    grid-template-areas:
+      "tabs tabs tabs tabs tabs"
+      "tree s1 term s2 prev"
+      "stat stat stat stat stat"; }
+
+  /* ---- tabs ---- */
+  #tabs { grid-area: tabs; display: flex; align-items: stretch; gap: 2px;
+    background: var(--bg2); border-bottom: 1px solid var(--line); padding: 4px 6px 0; }
+  .tab { display: flex; align-items: center; gap: 7px; padding: 0 10px;
+    background: var(--bg3); border: 1px solid var(--line); border-bottom: none;
+    border-radius: 6px 6px 0 0; cursor: pointer; max-width: 190px; color: var(--dim); }
+  .tab.active { background: var(--bg); color: var(--fg); border-color: #35353f; }
+  .tab .name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .tab .close { border: none; background: none; color: inherit; cursor: pointer;
+    padding: 0 2px; font-size: 13px; border-radius: 3px; }
+  .tab .close:hover { background: #3a2020; color: #ff7b7b; }
+  #newtab { border: 1px dashed var(--line); background: none; color: var(--dim);
+    border-radius: 6px 6px 0 0; padding: 0 12px; cursor: pointer; font: inherit; }
+  #newtab:hover { color: var(--fg); border-color: #45454f; }
+  #empty { grid-area: term; display: flex; flex-direction: column; gap: 10px;
+    align-items: center; justify-content: center; color: var(--dim); }
+  #empty button { font: inherit; padding: 8px 18px; border-radius: 6px;
+    border: 1px solid #35353f; background: var(--bg3); color: var(--fg); cursor: pointer; }
+
+  /* ---- tree ---- */
+  #tree { grid-area: tree; overflow: auto; background: var(--bg2);
+    border-right: 1px solid var(--line); padding: 4px 0; }
+  #tree .hdr { display: flex; align-items: center; padding: 2px 8px 6px;
+    color: var(--dim); }
+  #tree .hdr .root { overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    direction: rtl; text-align: left; flex: 1; }
+  #tree .hdr button { background: none; border: none; color: var(--dim);
+    cursor: pointer; font-size: 13px; padding: 0 4px; }
+  #tree .hdr button:hover { color: var(--fg); }
+  .node { cursor: pointer; }
+  .node > .row { display: flex; align-items: center; gap: 5px; padding: 1px 6px;
+    white-space: nowrap; }
+  .node > .row:hover { background: #20202a; }
+  .node > .row.sel { background: #24304a; }
+  .node .arrow { width: 10px; color: var(--dim); font-size: 9px; flex: 0 0 auto; }
+  .node .ico { flex: 0 0 auto; opacity: .8; }
+  .node .label { overflow: hidden; text-overflow: ellipsis; }
+  .node.changed > .row .label { color: var(--changed); }
+  .node.changed > .row .label::after { content: " ●"; font-size: 8px; }
+  .kids { padding-left: 14px; }
+
+  /* ---- terminal ---- */
+  #termhost { grid-area: term; position: relative; min-width: 0; min-height: 0; }
+  .termbox { position: absolute; inset: 0; padding: 4px 0 0 6px; display: none; }
+  .termbox.active { display: block; }
+
+  /* ---- splitters ---- */
+  #s1 { grid-area: s1; } #s2 { grid-area: s2; }
+  .split { cursor: col-resize; background: var(--line); }
+  .split:hover { background: var(--accent); }
+
+  /* ---- preview ---- */
+  #preview { grid-area: prev; display: flex; flex-direction: column;
+    background: var(--bg2); border-left: 1px solid var(--line); min-width: 0; }
+  #pv-modes { display: flex; gap: 2px; padding: 5px 6px; border-bottom: 1px solid var(--line); }
+  #pv-modes button { flex: 1; font: inherit; padding: 3px 0; background: var(--bg3);
+    color: var(--dim); border: 1px solid var(--line); border-radius: 4px; cursor: pointer; }
+  #pv-modes button.on { color: var(--fg); background: #24304a; border-color: #35507a; }
+  #pv-body { flex: 1; min-height: 0; position: relative; }
+  .pv-view { position: absolute; inset: 0; display: none; overflow: auto; }
+  .pv-view.on { display: flex; flex-direction: column; }
+  #pv-file { user-select: text; }
+  #pv-file .path { padding: 4px 8px; color: var(--dim); border-bottom: 1px solid var(--line);
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis; direction: rtl;
+    text-align: left; flex: 0 0 auto; }
+  #pv-file .content { flex: 1; overflow: auto; }
+  #pv-file pre { margin: 0; padding: 8px; font: 11.5px/1.5 "Cascadia Mono", Consolas, monospace;
+    white-space: pre; }
+  #pv-file .md { padding: 10px 14px; font-size: 13px; }
+  #pv-file .md pre { background: var(--bg3); border-radius: 4px; }
+  #pv-file .md code { background: var(--bg3); padding: 0 3px; border-radius: 3px; }
+  #pv-file .md a { color: var(--accent); }
+  #pv-file img { max-width: 100%; padding: 8px; }
+  #pv-file .note { padding: 14px; color: var(--dim); }
+  #pv-app .bar { display: flex; gap: 4px; padding: 4px 6px; border-bottom: 1px solid var(--line);
+    flex: 0 0 auto; }
+  #pv-app .bar input { flex: 1; font: inherit; background: var(--bg); color: var(--fg);
+    border: 1px solid var(--line); border-radius: 4px; padding: 3px 7px; min-width: 0; }
+  #pv-app .bar button { font: inherit; background: var(--bg3); color: var(--dim);
+    border: 1px solid var(--line); border-radius: 4px; cursor: pointer; padding: 0 8px; }
+  #pv-app .bar button:hover { color: var(--fg); }
+  #pv-app iframe { flex: 1; border: none; background: #fff; width: 100%; }
+  #pv-app .placeholder { flex: 1; display: flex; align-items: center; justify-content: center;
+    color: var(--dim); text-align: center; padding: 0 20px; }
+  #pv-feed .list { flex: 1; overflow: auto; padding: 4px 0; }
+  .feed-item { display: flex; align-items: center; gap: 7px; padding: 4px 9px;
+    cursor: pointer; border-bottom: 1px solid #1b1b22; }
+  .feed-item:hover { background: #20202a; }
+  .feed-item .what { flex: 1; overflow: hidden; text-overflow: ellipsis;
+    white-space: nowrap; direction: rtl; text-align: left; }
+  .feed-item .t { color: var(--dim); flex: 0 0 auto; font-size: 10.5px; }
+  .feed-item .open { border: 1px solid var(--line); background: none; color: var(--dim);
+    border-radius: 3px; cursor: pointer; font-size: 10.5px; padding: 1px 6px; }
+  .feed-item .open:hover { color: var(--fg); }
+  .feed-empty { padding: 16px; color: var(--dim); text-align: center; }
+
+  /* ---- status bar ---- */
+  #status { grid-area: stat; display: flex; align-items: center; gap: 16px;
+    padding: 0 10px; background: var(--bg2); border-top: 1px solid var(--line);
+    font-family: "Cascadia Mono", Consolas, monospace; font-size: 11px; color: var(--dim);
+    white-space: nowrap; overflow: hidden; }
+  #status .seg b { color: var(--fg); font-weight: 600; }
+  #status.stale { opacity: .45; }
+  #status .spacer { flex: 1; }
+  #status .warn { color: var(--changed); }
 </style>
 </head>
 <body>
 <div id="app">
-  <div id="bar">
-    <button id="t-dump">100MB dump</button>
-    <button id="t-unicode">unicode</button>
-    <button id="t-alt">alt screen</button>
-    <button id="t-claude">launch claude</button>
-    <button id="t-reset">reset</button>
-    <span id="stats">idle</span>
+  <div id="tabs"></div>
+  <div id="tree"></div>
+  <div id="s1" class="split"></div>
+  <div id="termhost"></div>
+  <div id="s2" class="split"></div>
+  <div id="preview">
+    <div id="pv-modes">
+      <button data-mode="file">File</button>
+      <button data-mode="app">App</button>
+      <button data-mode="feed">Feed</button>
+    </div>
+    <div id="pv-body">
+      <div id="pv-file" class="pv-view"></div>
+      <div id="pv-app" class="pv-view">
+        <div class="bar">
+          <input id="pv-url" placeholder="http://localhost:5173" spellcheck="false" />
+          <button id="pv-go" title="Load">Go</button>
+          <button id="pv-reload" title="Reload">⟳</button>
+          <button id="pv-ext" title="Open in browser">↗</button>
+        </div>
+        <div class="placeholder">No app loaded.<br/>Localhost links Claude starts or mentions land in the Feed; tap one to open it here.</div>
+      </div>
+      <div id="pv-feed" class="pv-view"><div class="list"></div></div>
+    </div>
   </div>
-  <div id="term"></div>
+  <div id="status"><span class="seg">no session</span></div>
 </div>
-<script type="module" src="/src/spike.js"></script>
+<script type="module" src="/src/main.js"></script>
 </body>
 </html>

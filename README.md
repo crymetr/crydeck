@@ -27,10 +27,21 @@ the architecture review.
 
 ## Status
 
-Phase 0: PTY spike. Throwaway code in `src/spike.js` and `src-tauri/src/pty.rs`.
-It answers one question and nothing else: does a Tauri + ConPTY + xterm.js
-terminal feel as good as Windows Terminal under load? If it does not, the Tauri
-plan is dead and we say so before building any UI on top of it.
+v0.2.0, full e2e build on the Design v2 architecture (see PLAN.md):
+
+- Tabs, one Claude session per tab, own cwd, cap 6, restored on relaunch
+- Lazy file tree, changed-file highlighting fed by Claude Code PostToolUse hooks
+- Preview pane with File / App / Feed modes; App is a live iframe per session,
+  Feed collects files Claude edits and localhost URLs it mentions
+- Status bar from the statusLine hook: model, effort, context %, limits, cost
+- Sessions run pwsh 7 with PSReadLine predictions; `claude` is wrapped so the
+  hook settings ride along via --settings, user settings.json never touched
+- `app.exe <folder>` opens a session at that folder
+
+Not yet done: Job Objects on tab close (taskkill /T fallback in place), git
+dirty decoration, ConPTY EOF reader-thread reclaim, human feel test.
+
+Phase 0 spike is archived in `src/spike.js`.
 
 ## Dev
 
