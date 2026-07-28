@@ -50,10 +50,16 @@ pub fn start(app: AppHandle) -> Result<Gateway, String> {
             let q = parse_query(query);
 
             if q.get("token").map(String::as_str) != Some(tok.as_str()) {
+                gwlog(&format!("DENIED {path} (bad token)"));
                 let _ = req.respond(resp(403, ""));
                 continue;
             }
             let tab: u32 = q.get("tab").and_then(|t| t.parse().ok()).unwrap_or(u32::MAX);
+            if tab == u32::MAX {
+                // The shim's %COCKPIT_TAB_ID% did not expand: the hook ran in
+                // an environment that never inherited the tab identity.
+                gwlog(&format!("{path} with unresolved tab id: {:?}", q.get("tab")));
+            }
 
             let mut body = String::new();
             // Hook payloads are small JSON; cap defensively at 1MB.
@@ -61,11 +67,13 @@ pub fn start(app: AppHandle) -> Result<Gateway, String> {
 
             match path.as_str() {
                 "/status" => {
+                    gwlog(&format!("status tab={tab} {}B", body.len()));
                     let line = render_status_line(&body);
                     let _ = app.emit("cockpit-status", HookEvent { tab, raw: body });
                     let _ = req.respond(resp(200, &line));
                 }
                 "/tool" => {
+                    gwlog(&format!("tool tab={tab} {}B", body.len()));
                     let _ = app.emit("cockpit-tool", HookEvent { tab, raw: body });
                     let _ = req.respond(resp(200, ""));
                 }
@@ -167,6 +175,20 @@ Write-Host "cockpit session | tab $env:COCKPIT_TAB_ID | 'claude' wired to hooks"
     );
     std::fs::write(&init, init_ps1).map_err(|e| e.to_string())?;
     Ok(())
+}
+
+/// Gateway diagnostics into the same trace file everything else uses. This is
+/// how "the status bar is empty" gets diagnosed: no line here means the hook
+/// never fired; a line with a wrong tab means env inheritance broke.
+fn gwlog(m: &str) {
+    use std::io::Write;
+    if let Ok(mut f) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(crate::pty::log_path())
+    {
+        let _ = writeln!(f, "[gw] {m}");
+    }
 }
 
 fn resp(code: u16, body: &str) -> tiny_http::Response<std::io::Cursor<Vec<u8>>> {

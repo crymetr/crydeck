@@ -106,6 +106,18 @@ async function newSession(cwd) {
   setTimeout(() => { if (sessions.has(s.ptyId)) invoke('pty_write', { id: s.ptyId, data: 'claude\r' }); }, 2500);
 
   s.tree = buildTree(s);
+  invoke('fs_watch', { tab: s.ptyId, root: cwd }).catch((e) => trace(`fs_watch failed: ${e}`));
+
+  // Claude Code narrates what it is doing through the terminal title escape.
+  // That belongs on the tab, not on the window (where it painted over the
+  // titlebar as clipped garbage).
+  s.term.onTitleChange((t) => {
+    if (!s.tabEl) return;
+    const name = t && t.trim() ? t.trim() : basename(s.cwd);
+    s.tabEl.querySelector('.name').textContent = name;
+    s.tabEl.title = `${s.cwd}\n${name}`;
+  });
+
   makeTab(s);
   activate(s);
   persistTabs();
@@ -115,6 +127,7 @@ async function newSession(cwd) {
 
 function closeSession(s) {
   invoke('pty_kill', { id: s.ptyId }).catch(() => {});
+  invoke('fs_unwatch', { tab: s.ptyId }).catch(() => {});
   sessions.delete(s.ptyId);
   s.term.dispose();
   s.box.remove();
@@ -139,6 +152,7 @@ function activate(s) {
     if (o.iframe) o.iframe.style.display = 'none';
   }
   $('empty')?.remove();
+  if (s.treeDirty) { s.treeDirty = false; s.tree.refresh(); }
   requestAnimationFrame(() => { fitActive(); s.term.focus(); });
   setPvMode(s.pvMode, true);
   renderStatus();
@@ -223,7 +237,14 @@ function buildTree(s) {
       const p = dir.replace(/[\\/]+$/, '') + '\\' + en.name;
       const node = document.createElement('div');
       node.className = 'node';
-      if (s.changed.has(norm(p))) node.classList.add('changed');
+      if (en.is_dir) {
+        // A folder is "changed" if anything Claude edited lives under it, so
+        // the mark survives refreshes and shows through collapsed levels.
+        const np = norm(p) + '\\';
+        if ([...s.changed].some((c) => c.startsWith(np))) node.classList.add('changed');
+      } else if (s.changed.has(norm(p))) {
+        node.classList.add('changed');
+      }
       const row = document.createElement('div');
       row.className = 'row';
       row.innerHTML = `<span class="arrow">${en.is_dir ? '▶' : ''}</span><span class="ico">${en.is_dir ? '📁' : '📄'}</span><span class="label">${esc(en.name)}</span>`;
@@ -289,9 +310,15 @@ function buildTree(s) {
   };
 }
 
-// Files changed outside Claude appear on refresh; window focus is the cheap
-// moment to do it (you just came back from doing something).
-window.addEventListener('focus', () => active?.tree.refresh());
+// Real-time tree: the Rust watcher coalesces filesystem churn per session and
+// pings us here. Background tabs just mark dirty and refresh on activation.
+listen('cockpit-fs', (ev) => {
+  const s = sessions.get(ev.payload.tab);
+  if (!s) return;
+  trace(`fs change in session ${s.ptyId}`);
+  if (s === active) s.tree.refresh();
+  else s.treeDirty = true;
+});
 
 // ------------------------------------------------------------------ preview
 
@@ -386,6 +413,14 @@ function addFeed(s, kind, value) {
   if (s === active && s.pvMode === 'feed') renderFeed(s);
 }
 
+// Show file paths relative to the session root; URLs verbatim. Full value
+// lives in the row tooltip.
+function feedLabel(f) {
+  if (f.kind === 'url') return f.value;
+  const root = norm(active?.cwd || '');
+  return norm(f.value).startsWith(root + '\\') ? f.value.slice(root.length + 1) : f.value;
+}
+
 function renderFeed(s) {
   const list = document.querySelector('#pv-feed .list');
   if (!s.feed.length) {
@@ -397,7 +432,8 @@ function renderFeed(s) {
     const row = document.createElement('div');
     row.className = 'feed-item';
     const t = new Date(f.at).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' });
-    row.innerHTML = `<span class="ico">${f.kind === 'url' ? '🌐' : '📄'}</span><span class="what">${esc(f.value)}</span><span class="t">${t}</span><button class="open">${f.kind === 'url' ? 'browser' : 'OS open'}</button>`;
+    row.title = f.value;
+    row.innerHTML = `<span class="ico">${f.kind === 'url' ? '🌐' : '📄'}</span><span class="what">${esc(feedLabel(f))}</span><span class="t">${t}</span><button class="open">${f.kind === 'url' ? 'browser' : 'OS open'}</button>`;
     row.onclick = () => f.kind === 'url' ? loadApp(s, f.value) : showFile(s, f.value);
     row.querySelector('.open').onclick = (ev) => {
       ev.stopPropagation();
@@ -407,10 +443,14 @@ function renderFeed(s) {
   }
 }
 
-const URL_RE = /https?:\/\/(?:localhost|127\.0\.0\.1|0\.0\.0\.0)(?::\d+)?(?:\/[^\s'"`)\]>]*)?/gi;
-function scanUrls(s, text) {
+const ANSI_RE = /\x1b(?:\[[0-9;:?]*[ -\/]*[@-~]|\][^\x07\x1b]*(?:\x07|\x1b\\)|[@-_])/g;
+const URL_RE = /https?:\/\/(?:localhost|127\.0\.0\.1|0\.0\.0\.0)(?::\d+)?(?:\/[^\s'"`)\]>\x00-\x1f\x7f]*)?/gi;
+function scanUrls(s, raw) {
+  // TUI output is soaked in escape sequences; strip them or they end up glued
+  // into the matched URL (seen live: "style.css␛[38;2;215…").
+  const text = raw.replace(ANSI_RE, '');
   for (const m of text.matchAll(URL_RE)) {
-    let u = m[0].replace(/[.,;:]+$/, '');
+    let u = m[0].replace(/[.,;:\/]+$/, '');
     const key = u.toLowerCase();
     if (s.seenUrls.has(key)) continue;
     s.seenUrls.add(key);

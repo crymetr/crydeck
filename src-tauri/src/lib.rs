@@ -1,11 +1,13 @@
 mod fs;
 mod hooks;
 mod pty;
+mod watch;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
   tauri::Builder::default()
     .manage(pty::PtyState::default())
+    .manage(watch::WatchState::default())
     .invoke_handler(tauri::generate_handler![
       pty::pty_spawn,
       pty::pty_write,
@@ -19,6 +21,8 @@ pub fn run() {
       fs::pick_folder,
       fs::boot_folder,
       hooks::gateway_info,
+      watch::fs_watch,
+      watch::fs_unwatch,
     ])
     .setup(|app| {
       if cfg!(debug_assertions) {

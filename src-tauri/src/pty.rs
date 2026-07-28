@@ -217,15 +217,23 @@ pub fn pty_kill(state: tauri::State<'_, PtyState>, id: u32) -> Result<(), String
     Ok(())
 }
 
-/// Spike-only: lets the frontend persist benchmark lines so results can be read
-/// without a human watching the stats bar.
+/// Trace sink for the frontend and the gateway. MUST live outside any folder a
+/// session could be watching: writing a log line into a watched workspace makes
+/// the watcher fire, which traces, which writes, which fires, forever.
+pub fn log_path() -> std::path::PathBuf {
+    let base = std::env::var("LOCALAPPDATA").unwrap_or_else(|_| ".".into());
+    let dir = std::path::Path::new(&base).join("tr.cryme.cockpit");
+    let _ = std::fs::create_dir_all(&dir);
+    dir.join("cockpit.log")
+}
+
 #[tauri::command]
 pub fn bench_report(line: String) -> Result<(), String> {
-    let path = std::path::Path::new("C:\\dev\\cockpit\\bench.log");
+    let path = log_path();
     let mut f = std::fs::OpenOptions::new()
         .create(true)
         .append(true)
-        .open(path)
+        .open(&path)
         .map_err(|e| e.to_string())?;
     writeln!(f, "{line}").map_err(|e| e.to_string())
 }
