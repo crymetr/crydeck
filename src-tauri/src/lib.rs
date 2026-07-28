@@ -21,7 +21,7 @@ pub fn run() {
       fs::pick_folder,
       fs::boot_folder,
       hooks::gateway_info,
-      watch::fs_watch,
+      watch::fs_watch_dirs,
       watch::fs_unwatch,
     ])
     .setup(|app| {

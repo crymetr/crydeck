@@ -106,7 +106,6 @@ async function newSession(cwd) {
   setTimeout(() => { if (sessions.has(s.ptyId)) invoke('pty_write', { id: s.ptyId, data: 'claude\r' }); }, 2500);
 
   s.tree = buildTree(s);
-  invoke('fs_watch', { tab: s.ptyId, root: cwd }).catch((e) => trace(`fs_watch failed: ${e}`));
 
   // Claude Code narrates what it is doing through the terminal title escape.
   // That belongs on the tab, not on the window (where it painted over the
@@ -220,6 +219,13 @@ function buildTree(s) {
   const nodeByPath = new Map(); // norm path -> node element
   let selected = null;
 
+  // The watcher mirrors what the tree shows: root + expanded dirs, each
+  // non-recursive. Cheap even for a tab sitting on C:\dev, and a project
+  // folder Claude scaffolds under the root still appears the moment it lands.
+  const syncWatch = () =>
+    invoke('fs_watch_dirs', { tab: s.ptyId, dirs: [s.cwd, ...expanded] })
+      .catch((e) => trace(`fs_watch_dirs failed: ${e}`));
+
   const hdr = document.createElement('div');
   hdr.className = 'hdr';
   hdr.innerHTML = `<span class="root">${esc(s.cwd)}</span><button title="Refresh">⟳</button>`;
@@ -259,14 +265,23 @@ function buildTree(s) {
             kids.style.display = open ? 'none' : '';
             row.querySelector('.arrow').textContent = open ? '▶' : '▼';
             open ? expanded.delete(norm(p)) : expanded.add(norm(p));
+            syncWatch();
           } else {
             kids = document.createElement('div');
             kids.className = 'kids';
             node.appendChild(kids);
             row.querySelector('.arrow').textContent = '▼';
             expanded.add(norm(p));
+            syncWatch();
             await renderInto(kids, p);
           }
+        };
+        row.oncontextmenu = (ev) => {
+          ev.preventDefault();
+          contextMenu(ev, [
+            ['Open as session', () => newSession(p)],
+            ['Explorer here', () => invoke('os_explore', { path: p })],
+          ]);
         };
         row.ondblclick = () => invoke('os_explore', { path: p });
         if (expanded.has(norm(p))) row.onclick();
@@ -287,6 +302,7 @@ function buildTree(s) {
     nodeByPath.clear();
     selected = null;
     renderInto(rootKids, s.cwd);
+    syncWatch();
   }
   refresh();
 
@@ -511,6 +527,32 @@ function renderStatus() {
   el.classList.toggle('stale', Date.now() - active.statusAt > 120000);
 }
 setInterval(renderStatus, 15000);
+
+// Minimal floating context menu; dies on any click or Escape.
+function contextMenu(ev, items) {
+  document.getElementById('ctxmenu')?.remove();
+  const m = document.createElement('div');
+  m.id = 'ctxmenu';
+  m.style.cssText = `position:fixed;left:${ev.clientX}px;top:${ev.clientY}px;z-index:99;` +
+    'background:#1c1c24;border:1px solid #35353f;border-radius:6px;padding:3px;min-width:150px;' +
+    'box-shadow:0 6px 20px rgba(0,0,0,.5)';
+  for (const [label, fn] of items) {
+    const it = document.createElement('div');
+    it.textContent = label;
+    it.style.cssText = 'padding:5px 12px;border-radius:4px;cursor:pointer';
+    it.onmouseenter = () => (it.style.background = '#24304a');
+    it.onmouseleave = () => (it.style.background = '');
+    it.onclick = () => { m.remove(); fn(); };
+    m.appendChild(it);
+  }
+  document.body.appendChild(m);
+  const kill = () => { m.remove(); window.removeEventListener('pointerdown', onDown, true); };
+  const onDown = (e) => { if (!m.contains(e.target)) kill(); };
+  window.addEventListener('pointerdown', onDown, true);
+  window.addEventListener('keydown', function onKey(e) {
+    if (e.key === 'Escape') { kill(); window.removeEventListener('keydown', onKey); }
+  });
+}
 
 function fmtBytes(n) {
   if (n > 1048576) return (n / 1048576).toFixed(1) + 'MB';
