@@ -95,18 +95,45 @@ pub fn pty_spawn(
         let mut batch: Vec<u8> = Vec::with_capacity(READ_BUF);
         let mut last_flush = Instant::now();
 
+        // Where does the wall clock actually go: waiting on ConPTY, or waiting
+        // on the IPC bridge? This decides whether the transport is salvageable.
+        let mut read_ns: u128 = 0;
+        let mut send_ns: u128 = 0;
+        let mut flushes: u64 = 0;
+        let mut bytes: u64 = 0;
+
         loop {
-            match reader.read(&mut buf) {
+            let t_read = Instant::now();
+            let r = reader.read(&mut buf);
+            read_ns += t_read.elapsed().as_nanos();
+
+            match r {
                 Ok(0) => break, // pty closed
                 Ok(n) => {
+                    bytes += n as u64;
                     batch.extend_from_slice(&buf[..n]);
                     if batch.len() >= BATCH_BYTES || last_flush.elapsed() >= BATCH_INTERVAL {
-                        if out
-                            .send(InvokeResponseBody::Raw(std::mem::take(&mut batch)))
-                            .is_err()
-                        {
+                        let t_send = Instant::now();
+                        let sent = out.send(InvokeResponseBody::Raw(std::mem::take(&mut batch)));
+                        send_ns += t_send.elapsed().as_nanos();
+                        flushes += 1;
+
+                        if sent.is_err() {
                             break; // window went away
                         }
+
+                        if flushes % 400 == 0 {
+                            let line = format!(
+                                "[pty] {:.1}MB | flushes {} | read {:.1}s | send {:.1}s | avg batch {:.0}KB",
+                                bytes as f64 / 1048576.0,
+                                flushes,
+                                read_ns as f64 / 1e9,
+                                send_ns as f64 / 1e9,
+                                bytes as f64 / flushes as f64 / 1024.0,
+                            );
+                            let _ = bench_report(line);
+                        }
+
                         batch = Vec::with_capacity(READ_BUF);
                         last_flush = Instant::now();
                     }
