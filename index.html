@@ -1,0 +1,34 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>Cockpit PTY spike</title>
+<style>
+  html, body { margin: 0; height: 100%; background: #0d0d10; color: #d8d8de;
+    font: 12px/1.4 "Segoe UI", system-ui, sans-serif; overflow: hidden; }
+  #app { display: flex; flex-direction: column; height: 100%; }
+  #bar { display: flex; gap: 6px; align-items: center; padding: 6px 8px;
+    background: #16161c; border-bottom: 1px solid #26262f; flex: 0 0 auto; }
+  button { background: #23232c; color: #d8d8de; border: 1px solid #35353f;
+    border-radius: 4px; padding: 4px 9px; font: inherit; cursor: pointer; }
+  button:hover { background: #2d2d38; }
+  #stats { margin-left: auto; font-family: "Cascadia Mono", Consolas, monospace;
+    font-size: 11px; color: #8a8a96; white-space: pre; }
+  #term { flex: 1 1 auto; min-height: 0; padding: 4px 0 0 6px; }
+</style>
+</head>
+<body>
+<div id="app">
+  <div id="bar">
+    <button id="t-dump">100MB dump</button>
+    <button id="t-unicode">unicode</button>
+    <button id="t-alt">alt screen</button>
+    <button id="t-claude">launch claude</button>
+    <button id="t-reset">reset</button>
+    <span id="stats">idle</span>
+  </div>
+  <div id="term"></div>
+</div>
+<script type="module" src="/src/spike.js"></script>
+</body>
+</html>

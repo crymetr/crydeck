@@ -1,0 +1,298 @@
+// ConPTY plumbing for the Phase 0 spike.
+//
+// The design constraints all come from the Codex architecture review:
+//   - never send one IPC message per PTY read, batch by time AND size
+//   - read on a dedicated OS thread, never block that thread on the WebView
+//   - Ctrl-C is the byte 0x03 travelling through the PTY, not a Win32 console event
+//   - killing a session must take the whole process tree, not just the direct child
+
+use std::collections::HashMap;
+use std::io::{Read, Write};
+use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::Mutex;
+use std::time::{Duration, Instant};
+
+use portable_pty::{Child, CommandBuilder, MasterPty, NativePtySystem, PtySize, PtySystem};
+use tauri::ipc::{Channel, InvokeResponseBody};
+
+/// Flush the batch once it reaches this many bytes.
+const BATCH_BYTES: usize = 32 * 1024;
+/// ...or once this much time has passed, whichever comes first.
+const BATCH_INTERVAL: Duration = Duration::from_millis(12);
+/// Single read syscall size.
+const READ_BUF: usize = 64 * 1024;
+
+pub struct Session {
+    master: Box<dyn MasterPty + Send>,
+    writer: Box<dyn Write + Send>,
+    child: Box<dyn Child + Send + Sync>,
+    output: Channel<InvokeResponseBody>,
+    pid: Option<u32>,
+}
+
+#[derive(Default)]
+pub struct PtyState {
+    sessions: Mutex<HashMap<u32, Session>>,
+    next_id: AtomicU32,
+}
+
+#[tauri::command]
+pub fn pty_spawn(
+    state: tauri::State<'_, PtyState>,
+    cmd: String,
+    args: Vec<String>,
+    cwd: String,
+    cols: u16,
+    rows: u16,
+    on_output: Channel<InvokeResponseBody>,
+) -> Result<u32, String> {
+    let size = PtySize {
+        rows,
+        cols,
+        pixel_width: 0,
+        pixel_height: 0,
+    };
+
+    let pair = NativePtySystem::default()
+        .openpty(size)
+        .map_err(|e| format!("openpty failed: {e}"))?;
+
+    let mut builder = CommandBuilder::new(&cmd);
+    for a in &args {
+        builder.arg(a);
+    }
+    if !cwd.is_empty() {
+        builder.cwd(&cwd);
+    }
+
+    let id = state.next_id.fetch_add(1, Ordering::Relaxed);
+
+    // Each tab carries its own identity. cwd is NOT an identity: two tabs are
+    // allowed to sit on the same folder. Phase 5's statusLine shim reads this.
+    builder.env("COCKPIT_TAB_ID", id.to_string());
+
+    let child = pair
+        .slave
+        .spawn_command(builder)
+        .map_err(|e| format!("spawn '{cmd}' failed: {e}"))?;
+    let pid = child.process_id();
+
+    let writer = pair
+        .master
+        .take_writer()
+        .map_err(|e| format!("take_writer failed: {e}"))?;
+    let mut reader = pair
+        .master
+        .try_clone_reader()
+        .map_err(|e| format!("clone_reader failed: {e}"))?;
+
+    // Dedicated reader thread. Batches, then hands raw bytes to the WebView.
+    // InvokeResponseBody::Raw lands in JS as an ArrayBuffer, so there is no
+    // JSON encode/decode of terminal output on the hot path.
+    let out = on_output.clone();
+    std::thread::spawn(move || {
+        let mut buf = vec![0u8; READ_BUF];
+        let mut batch: Vec<u8> = Vec::with_capacity(READ_BUF);
+        let mut last_flush = Instant::now();
+
+        loop {
+            match reader.read(&mut buf) {
+                Ok(0) => break, // pty closed
+                Ok(n) => {
+                    batch.extend_from_slice(&buf[..n]);
+                    if batch.len() >= BATCH_BYTES || last_flush.elapsed() >= BATCH_INTERVAL {
+                        if out
+                            .send(InvokeResponseBody::Raw(std::mem::take(&mut batch)))
+                            .is_err()
+                        {
+                            break; // window went away
+                        }
+                        batch = Vec::with_capacity(READ_BUF);
+                        last_flush = Instant::now();
+                    }
+                }
+                Err(_) => break,
+            }
+        }
+
+        if !batch.is_empty() {
+            let _ = out.send(InvokeResponseBody::Raw(batch));
+        }
+    });
+
+    state.sessions.lock().unwrap().insert(
+        id,
+        Session {
+            master: pair.master,
+            writer,
+            child,
+            output: on_output,
+            pid,
+        },
+    );
+
+    Ok(id)
+}
+
+#[tauri::command]
+pub fn pty_write(state: tauri::State<'_, PtyState>, id: u32, data: String) -> Result<(), String> {
+    let mut sessions = state.sessions.lock().unwrap();
+    let s = sessions.get_mut(&id).ok_or("no such session")?;
+    s.writer
+        .write_all(data.as_bytes())
+        .map_err(|e| e.to_string())?;
+    s.writer.flush().map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn pty_resize(
+    state: tauri::State<'_, PtyState>,
+    id: u32,
+    cols: u16,
+    rows: u16,
+) -> Result<(), String> {
+    // The frontend already debounces and drops zero/duplicate sizes. This is the
+    // second line of defence: ConPTY apps redraw badly when fed a bogus size.
+    if cols < 2 || rows < 2 {
+        return Ok(());
+    }
+    let sessions = state.sessions.lock().unwrap();
+    let s = sessions.get(&id).ok_or("no such session")?;
+    s.master
+        .resize(PtySize {
+            rows,
+            cols,
+            pixel_width: 0,
+            pixel_height: 0,
+        })
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn pty_kill(state: tauri::State<'_, PtyState>, id: u32) -> Result<(), String> {
+    let mut sessions = state.sessions.lock().unwrap();
+    if let Some(mut s) = sessions.remove(&id) {
+        // Claude spawns node, MCP servers and tool subprocesses. Killing only the
+        // direct child leaks all of them. taskkill /T walks the tree.
+        // Phase 2 replaces this with a real Job Object, which is leak-proof even
+        // if the app crashes.
+        if let Some(pid) = s.pid {
+            let _ = std::process::Command::new("taskkill")
+                .args(["/T", "/F", "/PID", &pid.to_string()])
+                .output();
+        }
+        let _ = s.child.kill();
+    }
+    Ok(())
+}
+
+/// Spike-only: lets the frontend persist benchmark lines so results can be read
+/// without a human watching the stats bar.
+#[tauri::command]
+pub fn bench_report(line: String) -> Result<(), String> {
+    let path = std::path::Path::new("C:\\dev\\cockpit\\bench.log");
+    let mut f = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)
+        .map_err(|e| e.to_string())?;
+    writeln!(f, "{line}").map_err(|e| e.to_string())
+}
+
+// ------------------------------------------------------------------ torture
+
+/// Writes `megabytes` of ANSI-coloured text to a temp file, then makes the shell
+/// `type` it. This exercises the real chain: ConPTY -> reader thread -> batching
+/// -> IPC -> xterm render. A synthetic push straight into the channel would skip
+/// ConPTY and flatter the result.
+#[tauri::command]
+pub fn torture_dump(
+    state: tauri::State<'_, PtyState>,
+    id: u32,
+    megabytes: usize,
+) -> Result<String, String> {
+    let path = std::env::temp_dir().join(format!("cockpit_dump_{megabytes}mb.txt"));
+
+    if !path.exists() {
+        let mut line = String::new();
+        for i in 0..40 {
+            let colour = 31 + (i % 7);
+            line.push_str(&format!("\x1b[{colour}m block{i:03} \x1b[0m"));
+        }
+        line.push('\n');
+
+        let per_mb = 1_048_576 / line.len().max(1);
+        let mut f = std::fs::File::create(&path).map_err(|e| e.to_string())?;
+        for _ in 0..(per_mb * megabytes) {
+            f.write_all(line.as_bytes()).map_err(|e| e.to_string())?;
+        }
+        f.flush().map_err(|e| e.to_string())?;
+    }
+
+    let mut sessions = state.sessions.lock().unwrap();
+    let s = sessions.get_mut(&id).ok_or("no such session")?;
+    let cmd = format!("cmd /c type \"{}\"\r", path.display());
+    s.writer
+        .write_all(cmd.as_bytes())
+        .map_err(|e| e.to_string())?;
+    s.writer.flush().map_err(|e| e.to_string())?;
+
+    Ok(path.display().to_string())
+}
+
+/// CJK, emoji, ZWJ sequences, combining marks, box drawing. These are the cases
+/// where ConPTY, xterm and the font disagree about cell width.
+#[tauri::command]
+pub fn torture_unicode(state: tauri::State<'_, PtyState>, id: u32) -> Result<(), String> {
+    let path = std::env::temp_dir().join("cockpit_unicode.txt");
+    let sample = "\
+ascii      | the quick brown fox jumps over the lazy dog | 0123456789\n\
+cjk        | 日本語のテキスト 中文字符 한국어 텍스트      | wide cells\n\
+turkish    | Şğüıöç ŞĞÜİÖÇ  gerçekleştirilebilirlik       | latin-ext\n\
+emoji      | 🎉 🚀 ✅ ❌ ⚠️  🔥 💾 🧠                        | width guesswork\n\
+zwj family | 👨‍👩‍👧‍👦 👩‍💻 🏳️‍🌈                                  | grapheme clusters\n\
+combining  | e\u{0301} a\u{0300} o\u{0308} n\u{0303}      | combining marks\n\
+box        | ┌────────┬────────┐                          | drawing\n\
+box        | │ left   │ right  │                          | drawing\n\
+box        | └────────┴────────┘                          | drawing\n\
+powerline  | \u{e0b0} \u{e0b1} \u{e0b2} \u{e0b3}          | needs a nerd font\n";
+
+    std::fs::write(&path, sample).map_err(|e| e.to_string())?;
+
+    let mut sessions = state.sessions.lock().unwrap();
+    let s = sessions.get_mut(&id).ok_or("no such session")?;
+    let cmd = format!("cmd /c type \"{}\"\r", path.display());
+    s.writer
+        .write_all(cmd.as_bytes())
+        .map_err(|e| e.to_string())?;
+    s.writer.flush().map_err(|e| e.to_string())
+}
+
+/// Enter the alternate screen, draw, leave. The thing being tested is that the
+/// main buffer and scrollback come back intact, because that is what breaks when
+/// tab switching recreates an xterm instance.
+#[tauri::command]
+pub fn torture_alt_screen(state: tauri::State<'_, PtyState>, id: u32) -> Result<(), String> {
+    let sessions = state.sessions.lock().unwrap();
+    let s = sessions.get(&id).ok_or("no such session")?;
+    let out = s.output.clone();
+    drop(sessions);
+
+    std::thread::spawn(move || {
+        let mut frame = String::new();
+        frame.push_str("\x1b[?1049h"); // enter alt screen
+        frame.push_str("\x1b[2J\x1b[H"); // clear, home
+        frame.push_str("\x1b[1;33m  ALTERNATE SCREEN  \x1b[0m\r\n\r\n");
+        frame.push_str("  Scrollback behind this should be untouched.\r\n");
+        frame.push_str("  Returning to the main buffer in 3 seconds...\r\n");
+        let _ = out.send(InvokeResponseBody::Raw(frame.into_bytes()));
+
+        std::thread::sleep(Duration::from_secs(3));
+
+        let _ = out.send(InvokeResponseBody::Raw(
+            b"\x1b[?1049l\r\n\x1b[32m[alt screen exited]\x1b[0m\r\n".to_vec(),
+        ));
+    });
+
+    Ok(())
+}
