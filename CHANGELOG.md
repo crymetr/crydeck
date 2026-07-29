@@ -3,6 +3,11 @@
 All notable changes to CryDeck. Format loosely follows Keep a Changelog;
 versions are git tags.
 
+## v0.6.2 - 2026-07-29
+
+### Fixed
+- UI froze the moment a preview opened: webview-creating commands ran synchronously on the main thread and deadlocked against WebView2 creation. All preview commands are now async (off the main thread), and rect syncing is debounced.
+
 ## v0.6.1 - 2026-07-29
 
 ### Fixed

@@ -146,7 +146,7 @@ fn label_for(tab: u32) -> String {
 }
 
 #[tauri::command]
-pub fn preview_open(
+pub async fn preview_open(
     window: tauri::Window,
     state: tauri::State<'_, PreviewState>,
     gw: tauri::State<'_, crate::hooks::Gateway>,
@@ -180,7 +180,7 @@ pub fn preview_open(
 }
 
 #[tauri::command]
-pub fn preview_navigate(
+pub async fn preview_navigate(
     window: tauri::Window,
     state: tauri::State<'_, PreviewState>,
     tab: u32,
@@ -194,7 +194,7 @@ pub fn preview_navigate(
 }
 
 #[tauri::command]
-pub fn preview_rect(
+pub async fn preview_rect(
     window: tauri::Window,
     state: tauri::State<'_, PreviewState>,
     tab: u32,
@@ -212,7 +212,7 @@ pub fn preview_rect(
 /// Hide by parking offscreen: child webviews have no reliable hide() across
 /// platforms, but a negative position works everywhere.
 #[tauri::command]
-pub fn preview_visible(
+pub async fn preview_visible(
     window: tauri::Window,
     state: tauri::State<'_, PreviewState>,
     tab: u32,
@@ -240,7 +240,7 @@ pub fn preview_visible(
 }
 
 #[tauri::command]
-pub fn preview_close(
+pub async fn preview_close(
     window: tauri::Window,
     state: tauri::State<'_, PreviewState>,
     tab: u32,
@@ -255,7 +255,7 @@ pub fn preview_close(
 }
 
 #[tauri::command]
-pub fn preview_mode(
+pub async fn preview_mode(
     window: tauri::Window,
     state: tauri::State<'_, PreviewState>,
     tab: u32,
@@ -277,7 +277,7 @@ pub fn preview_mode(
 /// Screenshot the preview's on-screen region (annotations included, since GDI
 /// captures what is actually rendered). Returns the PNG path for Claude.
 #[tauri::command]
-pub fn preview_capture(
+pub async fn preview_capture(
     window: tauri::Window,
     state: tauri::State<'_, PreviewState>,
     tab: u32,

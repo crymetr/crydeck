@@ -555,9 +555,15 @@ function loadApp(s, url) {
 }
 
 // Keep the webview glued to the pane through splitter drags and resizes.
+// Debounced: a splitter drag emits dozens of rects a second and each one is a
+// cross-thread hop.
+let rectTimer = null;
 new ResizeObserver(() => {
-  if (active?.previewOpen && active.pvMode === 'app' && curPage(active))
-    invoke('preview_rect', { tab: active.ptyId, rect: appBodyRect() }).catch(() => {});
+  clearTimeout(rectTimer);
+  rectTimer = setTimeout(() => {
+    if (active?.previewOpen && active.pvMode === 'app' && curPage(active))
+      invoke('preview_rect', { tab: active.ptyId, rect: appBodyRect() }).catch(() => {});
+  }, 80);
 }).observe($('pv-appbody'));
 
 $('pv-go').onclick = () => active && $('pv-url').value.trim() && loadApp(active, $('pv-url').value.trim());
