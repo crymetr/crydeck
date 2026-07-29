@@ -1,5 +1,6 @@
 mod fs;
 mod hooks;
+mod preview;
 mod pty;
 mod watch;
 
@@ -8,6 +9,7 @@ pub fn run() {
   tauri::Builder::default()
     .manage(pty::PtyState::default())
     .manage(watch::WatchState::default())
+    .manage(preview::PreviewState::default())
     .invoke_handler(tauri::generate_handler![
       pty::pty_spawn,
       pty::pty_write,
@@ -26,6 +28,13 @@ pub fn run() {
       hooks::gateway_info,
       watch::fs_watch_dirs,
       watch::fs_unwatch,
+      preview::preview_open,
+      preview::preview_navigate,
+      preview::preview_rect,
+      preview::preview_visible,
+      preview::preview_close,
+      preview::preview_mode,
+      preview::preview_capture,
     ])
     .setup(|app| {
       if cfg!(debug_assertions) {

@@ -24,6 +24,7 @@ const PORT_RANGE: std::ops::Range<u16> = 48620..48640;
 pub struct Gateway {
     pub port: u16,
     pub dir: PathBuf,
+    pub token: String,
 }
 
 #[derive(serde::Serialize, Clone)]
@@ -78,6 +79,20 @@ pub fn start(app: AppHandle) -> Result<Gateway, String> {
                     let _ = app.emit("cockpit-tool", HookEvent { raw: body });
                     let _ = req.respond(resp(200, ""));
                 }
+                // Preview bridge: the injected picker/annotator scripts report
+                // here (they cannot use Tauri IPC from a remote origin).
+                "/select" => {
+                    let _ = app.emit("cockpit-select", HookEvent { raw: body });
+                    let _ = req.respond(resp(200, ""));
+                }
+                "/annotate" => {
+                    let _ = app.emit("cockpit-annotate", HookEvent { raw: body });
+                    let _ = req.respond(resp(200, ""));
+                }
+                "/pickoff" => {
+                    let _ = app.emit("cockpit-pickoff", HookEvent { raw: body });
+                    let _ = req.respond(resp(200, ""));
+                }
                 _ => {
                     let _ = req.respond(resp(404, ""));
                 }
@@ -85,7 +100,7 @@ pub fn start(app: AppHandle) -> Result<Gateway, String> {
         }
     });
 
-    Ok(Gateway { port, dir })
+    Ok(Gateway { port, dir, token })
 }
 
 /// Fixed range so the installed command survives restarts; scan handles a

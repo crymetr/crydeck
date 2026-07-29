@@ -86,6 +86,7 @@
   #pv-modes button { flex: 1; font: inherit; padding: 3px 0; background: var(--bg3);
     color: var(--dim); border: 1px solid var(--line); border-radius: 4px; cursor: pointer; }
   #pv-modes button.on { color: var(--fg); background: #24304a; border-color: #35507a; }
+  #pv-modes #shellToggle { flex: 0 0 auto; padding: 3px 10px; }
   #pv-body { flex: 1; min-height: 0; position: relative; }
   .pv-view { position: absolute; inset: 0; display: none; overflow: auto; }
   .pv-view.on { display: flex; flex-direction: column; }
@@ -118,9 +119,32 @@
   #pv-app .bar button { font: inherit; background: var(--bg3); color: var(--dim);
     border: 1px solid var(--line); border-radius: 4px; cursor: pointer; padding: 0 8px; }
   #pv-app .bar button:hover { color: var(--fg); }
-  #pv-app iframe { flex: 1; border: none; background: #fff; width: 100%; }
-  #pv-app .placeholder { flex: 1; display: flex; align-items: center; justify-content: center;
-    color: var(--dim); text-align: center; padding: 0 20px; }
+  #pv-app .bar button.on { color: var(--fg); background: #4a3a1a; border-color: #7a5f2a; }
+  #pv-pagetabs { display: none; gap: 2px; padding: 3px 6px 0; flex: 0 0 auto; }
+  #pv-pagetabs.has { display: flex; }
+  #pv-pagetabs .ptab { display: flex; align-items: center; gap: 5px; padding: 2px 8px;
+    background: var(--bg3); border: 1px solid var(--line); border-radius: 4px 4px 0 0;
+    color: var(--dim); cursor: pointer; max-width: 150px; font-size: 11px; }
+  #pv-pagetabs .ptab.on { color: var(--fg); border-color: #35507a; background: #1a2436; }
+  #pv-pagetabs .ptab span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  #pv-pagetabs .ptab b { cursor: pointer; font-weight: 400; }
+  #pv-appbody { flex: 1; min-height: 0; position: relative; }
+  #pv-app .placeholder { position: absolute; inset: 0; display: flex; align-items: center;
+    justify-content: center; color: var(--dim); text-align: center; padding: 0 20px; }
+  /* ---- extra terminals under the preview ---- */
+  #pv-shells { flex: 0 0 auto; border-top: 1px solid var(--line); display: none;
+    flex-direction: column; height: 220px; }
+  #pv-shells.open { display: flex; }
+  #pv-shells .shhdr { display: flex; gap: 2px; align-items: center; padding: 3px 6px;
+    background: var(--bg3); flex: 0 0 auto; }
+  #pv-shells .shhdr .stab { padding: 1px 9px; border: 1px solid var(--line); border-radius: 4px;
+    color: var(--dim); cursor: pointer; font-size: 11px; background: var(--bg2); }
+  #pv-shells .shhdr .stab.on { color: var(--fg); background: #24304a; border-color: #35507a; }
+  #pv-shells .shhdr button { background: none; border: none; color: var(--dim); cursor: pointer; }
+  #pv-shells .shhdr button:hover { color: var(--fg); }
+  #pv-shells .shbody { flex: 1; min-height: 0; position: relative; background: var(--bg); }
+  #pv-shells .shbody .termbox { padding: 2px 0 0 4px; }
+  #shellToggle { margin-left: auto; }
   #pv-feed .list { flex: 1; overflow: auto; padding: 4px 0; }
   .feed-item { display: flex; align-items: center; gap: 7px; padding: 4px 9px;
     cursor: pointer; border-bottom: 1px solid #1b1b22; }
@@ -156,6 +180,7 @@
       <button data-mode="file">File</button>
       <button data-mode="app">App</button>
       <button data-mode="feed">Feed</button>
+      <button id="shellToggle" title="Terminals under the preview">⌨</button>
     </div>
     <div id="pv-body">
       <div id="pv-file" class="pv-view"></div>
@@ -164,11 +189,21 @@
           <input id="pv-url" placeholder="http://localhost:5173" spellcheck="false" />
           <button id="pv-go" title="Load">Go</button>
           <button id="pv-reload" title="Reload">⟳</button>
+          <button id="pv-pick" title="Select an element, Claude gets told where to look">🎯</button>
+          <button id="pv-ann" title="Draw annotation boxes on the page">✏️</button>
+          <button id="pv-send" title="Send annotated screenshot to Claude" style="display:none">Send</button>
           <button id="pv-ext" title="Open in browser">↗</button>
         </div>
-        <div class="placeholder">No app loaded.<br/>Localhost links Claude starts or mentions land in the Feed; tap one to open it here.</div>
+        <div id="pv-pagetabs"></div>
+        <div id="pv-appbody">
+          <div class="placeholder">No app loaded.<br/>Localhost links Claude starts or mentions land in the Feed; tap one to open it here.</div>
+        </div>
       </div>
       <div id="pv-feed" class="pv-view"><div class="list"></div></div>
+    </div>
+    <div id="pv-shells">
+      <div class="shhdr"><span id="sh-tabs" style="display:flex;gap:2px"></span><button id="sh-add" title="New terminal">+</button><button id="sh-close" title="Hide terminals" style="margin-left:auto">▾</button></div>
+      <div class="shbody" id="sh-body"></div>
     </div>
   </div>
   <div id="status"><span class="seg">no session</span></div>

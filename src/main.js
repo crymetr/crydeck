@@ -69,7 +69,9 @@ async function newSession(cwd) {
     feed: [],                // { kind:'url'|'file', value, at }
     seenUrls: new Set(),
     status: null, statusAt: 0,
-    pvMode: 'feed', pvFile: null, appUrl: '', iframe: null,
+    pvMode: 'feed', pvFile: null,
+    pages: [], pageIdx: -1, previewOpen: false, pickOn: false, annOn: false,
+    shells: [], shellIdx: -1, shellsOpen: false,
     tree: null,              // built lazily below
     tabEl: null, lastSize: '',
   };
@@ -150,11 +152,16 @@ function closeSession(s) {
   invoke('pty_kill', { id: s.ptyId }).catch(() => {});
   invoke('fs_unwatch', { tab: s.ptyId }).catch(() => {});
   sessions.delete(s.ptyId);
+  invoke('preview_close', { tab: s.ptyId }).catch(() => {});
+  for (const sh of s.shells) {
+    invoke('pty_kill', { id: sh.ptyId }).catch(() => {});
+    sh.term.dispose();
+    sh.box.remove();
+  }
   s.term.dispose();
   s.box.remove();
   s.tabEl.remove();
   s.tree.el.remove();
-  if (s.iframe) s.iframe.remove();
   if (active === s) {
     active = null;
     const rest = [...sessions.values()];
@@ -171,12 +178,13 @@ function activate(s) {
     o.tabEl?.classList.toggle('active', o === s);
     if (o === s) o.tabEl?.classList.remove('busy', 'attn');
     o.tree.el.style.display = o === s ? '' : 'none';
-    if (o.iframe) o.iframe.style.display = 'none';
+    if (o !== s) invoke('preview_visible', { tab: o.ptyId, visible: false, rect: null }).catch(() => {});
   }
   $('empty')?.remove();
   if (s.treeDirty) { s.treeDirty = false; s.tree.refresh(); }
   requestAnimationFrame(() => { fitActive(); s.term.focus(); });
   setPvMode(s.pvMode, true);
+  renderShells(s);
   renderStatus();
 }
 
@@ -379,6 +387,8 @@ function setPvMode(mode, force = false) {
     b.classList.toggle('on', b.dataset.mode === mode);
   for (const v of document.querySelectorAll('.pv-view')) v.classList.remove('on');
   $(`pv-${mode}`).classList.add('on');
+  if (mode !== 'app' && active.previewOpen)
+    invoke('preview_visible', { tab: active.ptyId, visible: false, rect: null }).catch(() => {});
   if (mode === 'file' && active.pvFile) renderFile(active);
   if (mode === 'app') renderApp(active);
   if (mode === 'feed') renderFeed(active);
@@ -466,36 +476,152 @@ async function renderFile(s) {
   }
 }
 
+// The preview is a Tauri child webview parked over #pv-appbody. Child, not
+// iframe, because we inject the picker/annotator script into whatever page it
+// loads — an iframe can't do that cross-origin.
+const curPage = (s) => (s.pageIdx >= 0 ? s.pages[s.pageIdx] : null);
+
+function appBodyRect() {
+  const r = $('pv-appbody').getBoundingClientRect();
+  return { x: r.left, y: r.top, w: r.width, h: r.height };
+}
+
+async function showPreview(s) {
+  const page = curPage(s);
+  if (!page) return;
+  const rect = appBodyRect();
+  if (rect.w < 20 || rect.h < 20) return;
+  try {
+    if (!s.previewOpen) {
+      await invoke('preview_open', { tab: s.ptyId, url: page.url, rect });
+      s.previewOpen = true;
+      s.openUrl = page.url;
+    } else {
+      await invoke('preview_visible', { tab: s.ptyId, visible: true, rect });
+      if (s.openUrl !== page.url) {
+        await invoke('preview_navigate', { tab: s.ptyId, url: page.url });
+        s.openUrl = page.url;
+      }
+    }
+  } catch (e) { trace(`preview failed: ${e}`); }
+}
+
 function renderApp(s) {
-  $('pv-url').value = s.appUrl;
-  const ph = document.querySelector('#pv-app .placeholder');
-  for (const o of sessions.values())
-    if (o.iframe) o.iframe.style.display = 'none';
-  if (s.appUrl && s.iframe) {
-    ph.style.display = 'none';
-    s.iframe.style.display = '';
-  } else {
-    ph.style.display = '';
-  }
+  const page = curPage(s);
+  $('pv-url').value = page ? page.url : '';
+  document.querySelector('#pv-app .placeholder').style.display = page ? 'none' : '';
+  const tabs = $('pv-pagetabs');
+  tabs.classList.toggle('has', s.pages.length > 1);
+  tabs.innerHTML = '';
+  s.pages.forEach((p, i) => {
+    const t = document.createElement('div');
+    t.className = 'ptab' + (i === s.pageIdx ? ' on' : '');
+    t.innerHTML = `<span>${esc(p.url.replace(/^https?:\/\//, ''))}</span><b title="Close">×</b>`;
+    t.onclick = () => { s.pageIdx = i; renderApp(s); if (s === active && s.pvMode === 'app') showPreview(s); };
+    t.querySelector('b').onclick = (ev) => {
+      ev.stopPropagation();
+      s.pages.splice(i, 1);
+      if (s.pageIdx >= s.pages.length) s.pageIdx = s.pages.length - 1;
+      renderApp(s);
+      if (s.pages.length === 0 && s.previewOpen) {
+        invoke('preview_visible', { tab: s.ptyId, visible: false, rect: null }).catch(() => {});
+      } else if (s === active && s.pvMode === 'app') showPreview(s);
+    };
+    tabs.appendChild(t);
+  });
+  setModeButtons(s);
+  if (s === active && s.pvMode === 'app' && page) showPreview(s);
+}
+
+function setModeButtons(s) {
+  $('pv-pick').classList.toggle('on', !!s.pickOn);
+  $('pv-ann').classList.toggle('on', !!s.annOn);
+  $('pv-send').style.display = s.annOn ? '' : 'none';
 }
 
 function loadApp(s, url) {
   if (!/^https?:\/\//i.test(url)) url = 'http://' + url;
-  s.appUrl = url;
-  if (!s.iframe) {
-    // One live iframe per session, so switching tabs never reloads your app
-    // state. That is the "own preview state" requirement, literally.
-    s.iframe = document.createElement('iframe');
-    if (s !== active) s.iframe.style.display = 'none';
-    $('pv-app').appendChild(s.iframe);
-  }
-  s.iframe.src = url;
+  const i = s.pages.findIndex((p) => p.url.toLowerCase() === url.toLowerCase());
+  s.pageIdx = i >= 0 ? i : s.pages.push({ url }) - 1;
   if (s === active) setPvMode('app', true);
 }
+
+// Keep the webview glued to the pane through splitter drags and resizes.
+new ResizeObserver(() => {
+  if (active?.previewOpen && active.pvMode === 'app' && curPage(active))
+    invoke('preview_rect', { tab: active.ptyId, rect: appBodyRect() }).catch(() => {});
+}).observe($('pv-appbody'));
+
 $('pv-go').onclick = () => active && $('pv-url').value.trim() && loadApp(active, $('pv-url').value.trim());
 $('pv-url').addEventListener('keydown', (e) => { if (e.key === 'Enter') $('pv-go').click(); });
-$('pv-reload').onclick = () => { if (active?.iframe) active.iframe.src = active.iframe.src; };
-$('pv-ext').onclick = () => active?.appUrl && invoke('os_open', { path: active.appUrl });
+$('pv-reload').onclick = () => {
+  const p = active && curPage(active);
+  if (p && active.previewOpen) invoke('preview_navigate', { tab: active.ptyId, url: p.url }).catch(() => {});
+};
+$('pv-ext').onclick = () => {
+  const p = active && curPage(active);
+  if (p) invoke('os_open', { path: p.url });
+};
+
+/* ---------- element picker + annotations ---------- */
+
+$('pv-pick').onclick = () => {
+  if (!active?.previewOpen) return;
+  active.pickOn = !active.pickOn;
+  if (active.pickOn && active.annOn) { active.annOn = false; invoke('preview_mode', { tab: active.ptyId, mode: 'annotate', on: false }).catch(() => {}); }
+  invoke('preview_mode', { tab: active.ptyId, mode: 'pick', on: active.pickOn }).catch(() => {});
+  setModeButtons(active);
+};
+$('pv-ann').onclick = () => {
+  if (!active?.previewOpen) return;
+  active.annOn = !active.annOn;
+  if (active.annOn && active.pickOn) { active.pickOn = false; invoke('preview_mode', { tab: active.ptyId, mode: 'pick', on: false }).catch(() => {}); }
+  invoke('preview_mode', { tab: active.ptyId, mode: 'annotate', on: active.annOn }).catch(() => {});
+  setModeButtons(active);
+};
+$('pv-send').onclick = () => {
+  if (!active?.annOn) return;
+  invoke('preview_mode', { tab: active.ptyId, mode: 'send_annotations', on: true }).catch(() => {});
+};
+
+listen('cockpit-select', (ev) => {
+  let j; try { j = JSON.parse(ev.payload.raw); } catch { return; }
+  const s = sessions.get(j.tab);
+  if (!s) return;
+  s.pickOn = false;
+  if (s === active) setModeButtons(s);
+  const msg = `Look at this element in the preview (${j.url}): ${j.selector}` +
+    (j.text ? ` with text "${j.text}"` : '') +
+    ` at ${j.rect?.x},${j.rect?.y} size ${j.rect?.w}x${j.rect?.h}. `;
+  invoke('pty_write', { id: s.ptyId, data: msg });
+  s.term.focus();
+});
+
+listen('cockpit-pickoff', (ev) => {
+  let j; try { j = JSON.parse(ev.payload.raw); } catch { return; }
+  const s = sessions.get(j.tab);
+  if (!s) return;
+  s.pickOn = false; s.annOn = false;
+  if (s === active) setModeButtons(s);
+});
+
+listen('cockpit-annotate', async (ev) => {
+  let j; try { j = JSON.parse(ev.payload.raw); } catch { return; }
+  const s = sessions.get(j.tab);
+  if (!s || !j.rects?.length) return;
+  let shot = '';
+  try { shot = await invoke('preview_capture', { tab: s.ptyId }); }
+  catch (e) { trace(`capture failed: ${e}`); }
+  const regions = j.rects.map((r, i) =>
+    `${i + 1}) at ${r.x},${r.y} size ${r.w}x${r.h}${r.near ? ` near ${r.near}` : ''}`).join('; ');
+  const msg = `I annotated the preview (${j.url}). Marked regions: ${regions}.` +
+    (shot ? ` Read the screenshot at ${shot} — the numbered boxes are my annotations.` : '') + ' ';
+  invoke('pty_write', { id: s.ptyId, data: msg });
+  s.annOn = false;
+  invoke('preview_mode', { tab: s.ptyId, mode: 'annotate', on: false }).catch(() => {});
+  if (s === active) setModeButtons(s);
+  s.term.focus();
+});
 
 // ------------------------------------------------------------------ feed
 
@@ -552,7 +678,7 @@ function scanUrls(s, raw) {
     trace(`url detected in session ${s.ptyId}: ${u}`);
     // First dev server of the session claims the App pane automatically; later
     // URLs only join the Feed so they never hijack what you are looking at.
-    if (!s.appUrl) loadApp(s, u);
+    if (!s.pages.length) loadApp(s, u);
   }
 }
 
@@ -642,6 +768,103 @@ setInterval(() => {
     }
   }
 }, 1000);
+
+/* ---------- extra terminals under the preview ---------- */
+
+const MAX_SHELLS = 3;
+
+async function spawnShell(s) {
+  if (s.shells.length >= MAX_SHELLS) return;
+  const term = new Terminal({
+    scrollback: 5000,
+    fontFamily: '"Cascadia Mono", Consolas, "Courier New", monospace',
+    fontSize: 12.5,
+    cursorBlink: true,
+    allowProposedApi: true,
+    theme: { background: '#0d0d10', foreground: '#d8d8de' },
+  });
+  const fit = new FitAddon();
+  term.loadAddon(fit);
+  try { term.loadAddon(new UnicodeGraphemesAddon()); } catch {}
+  const box = document.createElement('div');
+  box.className = 'termbox';
+  $('sh-body').appendChild(box);
+  term.open(box);
+
+  const decoder = new TextDecoder('utf-8', { fatal: false });
+  const onOutput = new Channel();
+  onOutput.onmessage = (msg) => {
+    const bytes = msg instanceof ArrayBuffer ? new Uint8Array(msg)
+      : (ArrayBuffer.isView(msg) ? new Uint8Array(msg.buffer, msg.byteOffset, msg.byteLength)
+      : new Uint8Array(msg));
+    term.write(decoder.decode(bytes, { stream: true }));
+  };
+  const args = ['-NoLogo', '-NoExit', '-ExecutionPolicy', 'Bypass', '-Command', `. '${gw.init_ps1}'`];
+  let ptyId;
+  const opts = (cmd) => ({ cmd, args, cwd: s.cwd, cols: term.cols || 90, rows: term.rows || 14, onOutput });
+  try { ptyId = await invoke('pty_spawn', opts('pwsh.exe')); }
+  catch { ptyId = await invoke('pty_spawn', opts('powershell.exe')); }
+  term.onData((d) => invoke('pty_write', { id: ptyId, data: d }));
+
+  const sh = { ptyId, term, fit, box, lastSize: '' };
+  s.shells.push(sh);
+  s.shellIdx = s.shells.length - 1;
+  renderShells(s);
+}
+
+function fitShell(s) {
+  const sh = s.shells[s.shellIdx];
+  if (!sh) return;
+  sh.fit.fit();
+  const { cols, rows } = sh.term;
+  if (cols < 2 || rows < 2) return;
+  const key = `${cols}x${rows}`;
+  if (key !== sh.lastSize) {
+    sh.lastSize = key;
+    invoke('pty_resize', { id: sh.ptyId, cols, rows });
+  }
+}
+
+function renderShells(s) {
+  const strip = $('pv-shells');
+  strip.classList.toggle('open', s.shellsOpen && s.shells.length > 0);
+  const tabs = $('sh-tabs');
+  tabs.innerHTML = '';
+  s.shells.forEach((sh, i) => {
+    const t = document.createElement('span');
+    t.className = 'stab' + (i === s.shellIdx ? ' on' : '');
+    t.textContent = `term ${i + 1}`;
+    t.onclick = () => { s.shellIdx = i; renderShells(s); };
+    t.oncontextmenu = (ev) => {
+      ev.preventDefault();
+      contextMenu(ev, [['Close terminal', () => {
+        invoke('pty_kill', { id: sh.ptyId }).catch(() => {});
+        sh.term.dispose(); sh.box.remove();
+        s.shells.splice(i, 1);
+        if (s.shellIdx >= s.shells.length) s.shellIdx = s.shells.length - 1;
+        if (!s.shells.length) s.shellsOpen = false;
+        renderShells(s);
+      }]]);
+    };
+    tabs.appendChild(t);
+  });
+  for (let i = 0; i < s.shells.length; i++)
+    s.shells[i].box.classList.toggle('active', i === s.shellIdx && s.shellsOpen);
+  // Other sessions' shell boxes stay detached from view.
+  for (const o of sessions.values())
+    if (o !== s) for (const sh of o.shells) sh.box.classList.remove('active');
+  if (s.shellsOpen && s.shells.length) requestAnimationFrame(() => { fitShell(s); s.shells[s.shellIdx]?.term.focus(); });
+}
+
+$('shellToggle').onclick = async () => {
+  if (!active) return;
+  active.shellsOpen = !active.shellsOpen;
+  if (active.shellsOpen && !active.shells.length) await spawnShell(active);
+  renderShells(active);
+};
+$('sh-add').onclick = () => active && spawnShell(active);
+$('sh-close').onclick = () => { if (active) { active.shellsOpen = false; renderShells(active); } };
+new ResizeObserver(() => active && active.shellsOpen && fitShell(active)).observe($('sh-body'));
 
 // Minimal floating context menu; dies on any click or Escape.
 function contextMenu(ev, items) {
