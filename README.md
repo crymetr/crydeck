@@ -24,17 +24,31 @@ is the entire reason it stays light (~250MB working set, single small binary).
 ## What it does
 
 - **Tabs are sessions.** One working directory + one Claude Code process per
-  tab (cap 6), restored on relaunch. Sessions launch with Remote Control on,
-  so your phone can pick any of them up.
+  tab (cap 6), restored on relaunch **with their conversations** (via
+  `--continue`). Sessions launch with Remote Control on, so your phone can
+  pick any of them up. Background tabs show a blue pulse while their Claude
+  works and an amber dot when it finishes or needs you.
 - **The tree is live and knows what Claude touched.** Files Claude edits glow
-  amber; open one and it turns green (seen); a re-edit flips it back. Powered
-  by Claude Code's own hook events, not filesystem guessing. The watcher
-  tracks only the root + expanded folders, so a tab on a huge parent dir is
-  cheap, and a project folder Claude scaffolds appears the moment it lands.
+  amber; open one and it turns green (seen); a re-edit flips it back; blue
+  dots mark uncommitted git changes. Powered by Claude Code's own hook
+  events, not filesystem guessing. The watcher tracks only the root +
+  expanded folders, so a tab on a huge parent dir is cheap, and a project
+  folder Claude scaffolds appears the moment it lands.
 - **Preview pane, three modes.** *File*: read-only viewer (code, rendered
-  markdown, images). *App*: a real embedded webview; the first dev server the
-  session starts loads automatically and stays alive across tab switches.
-  *Feed*: everything Claude produced, newest first, one tap to open.
+  markdown, images) with a **Content|Diff switch**; files Claude just changed
+  default to the diff. *App*: a real embedded webview with page tabs; the
+  first dev server the session starts loads automatically and stays alive
+  across tab switches. *Feed*: everything Claude produced, newest first.
+- **Point at things, literally.** Element select (🎯): click any element in
+  the running app and its selector, text and position are typed into Claude's
+  prompt. Annotations (✏️): draw numbered boxes on the page, hit Send, and
+  Claude gets the coordinates plus a screenshot with your boxes on it.
+- **Extra terminals** (⌨): up to three plain pwsh terminals per session in a
+  strip under the preview.
+- **Auto-continue after rate limits.** Right-click a tab and schedule a
+  `continue` for one minute after the limit resets (CryDeck knows the reset
+  time from the statusLine hook) or any custom delay. Always set by you,
+  never automatic; countdown in the status bar.
 - **OS integration.** Double-click opens files in their default app (docx to
   Word, xlsx to Excel) and folders in Explorer. Right-click a folder to spin
   it up as a new session.
