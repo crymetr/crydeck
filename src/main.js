@@ -477,19 +477,41 @@ function scanUrls(s, raw) {
 
 // ------------------------------------------------------------------ hooks in
 
+// Hook payloads carry session_id + cwd; that is the tab identity. First event
+// from a Claude session binds its session_id to the tab whose folder matches
+// (preferring an unbound tab, so two tabs on one folder still separate);
+// everything after routes by session_id alone.
+function sessionForHook(j) {
+  const sid = j.session_id;
+  if (sid) for (const s of sessions.values()) if (s.claudeSid === sid) return s;
+  const cwd = j.cwd || j.workspace?.current_dir;
+  if (!cwd) return null;
+  const nc = norm(cwd);
+  let best = null;
+  for (const s of sessions.values()) {
+    if (norm(s.cwd) !== nc) continue;
+    if (!s.claudeSid) { best = s; break; }
+    best ??= s; // all bound: claude restarted in this tab, rebind below
+  }
+  if (best && sid) best.claudeSid = sid;
+  return best;
+}
+
 listen('cockpit-status', (ev) => {
-  const s = sessions.get(ev.payload.tab);
+  let j;
+  try { j = JSON.parse(ev.payload.raw); } catch { return; }
+  const s = sessionForHook(j);
   if (!s) return;
-  try { s.status = JSON.parse(ev.payload.raw); } catch { return; }
+  s.status = j;
   s.statusAt = Date.now();
   if (s === active) renderStatus();
 });
 
 listen('cockpit-tool', (ev) => {
-  const s = sessions.get(ev.payload.tab);
-  if (!s) return;
   let j;
   try { j = JSON.parse(ev.payload.raw); } catch { return; }
+  const s = sessionForHook(j);
+  if (!s) return;
   const p = j.tool_input?.file_path || j.tool_input?.notebook_path;
   if (!p) return;
   s.changed.add(norm(p));

@@ -1,45 +1,52 @@
 // Hook gateway. Claude Code reports what it does through hooks; this module
 // receives those reports and turns them into UI events.
 //
-// Shape: a loopback-only HTTP listener on a random port with a per-run bearer
-// token. Two generated .cmd shims (statusLine, PostToolUse) POST their stdin to
-// it via curl.exe, carrying the tab identity from the inherited COCKPIT_TAB_ID
-// env var. A generated settings.json wires the shims in, and a generated
-// init.ps1 wraps `claude` so the settings ride along via --settings.
-// The user's own settings.json is never touched.
+// Windows lesson (cost us three debugging rounds): Claude Code executes hook
+// commands through whatever shell it resolves — usually git-bash, sometimes
+// cmd — so any shell-specific syntax (.cmd shims, %VAR%, $VAR) dies silently
+// in one of them. The installed hook command is therefore ONE direct curl.exe
+// invocation with zero shell constructs, valid in cmd, bash and PowerShell.
+//
+// Tab identity: the hook payload itself carries session_id and cwd; the
+// frontend maps those to tabs. No env vars involved.
+//
+// Stability: the command string is written into the user's settings.json once,
+// so the gateway uses a fixed port range and a token persisted in app data.
+// If the port drifts (collision), the installer rewrites the entries that
+// boot. The original settings.json is backed up once as .pre-cockpit.
 
 use std::io::Read;
 use std::path::{Path, PathBuf};
 use tauri::{AppHandle, Emitter};
 
+const PORT_RANGE: std::ops::Range<u16> = 48620..48640;
+
 pub struct Gateway {
     pub port: u16,
-    pub token: String,
     pub dir: PathBuf,
 }
 
 #[derive(serde::Serialize, Clone)]
 struct HookEvent {
-    tab: u32,
     raw: String,
 }
 
-/// Loopback + random port + random token. The token is not high security, it
-/// only stops another local process from casually spraying fake events.
 pub fn start(app: AppHandle) -> Result<Gateway, String> {
-    let server = tiny_http::Server::http("127.0.0.1:0").map_err(|e| e.to_string())?;
-    let port = match server.server_addr() {
-        tiny_http::ListenAddr::IP(a) => a.port(),
-        _ => return Err("no tcp addr".into()),
-    };
-    let token = random_token();
-
     let dir = app
         .path_resolver_dir()
         .ok_or("no local data dir")?
         .join("cockpit-hooks");
     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
-    write_artifacts(&dir, port, &token)?;
+
+    let server = bind_fixed_range()?;
+    let port = match server.server_addr() {
+        tiny_http::ListenAddr::IP(a) => a.port(),
+        _ => return Err("no tcp addr".into()),
+    };
+    let token = persistent_token(&dir)?;
+
+    write_init_script(&dir)?;
+    install_user_settings(port, &token)?;
 
     let tok = token.clone();
     std::thread::spawn(move || {
@@ -54,12 +61,6 @@ pub fn start(app: AppHandle) -> Result<Gateway, String> {
                 let _ = req.respond(resp(403, ""));
                 continue;
             }
-            let tab: u32 = q.get("tab").and_then(|t| t.parse().ok()).unwrap_or(u32::MAX);
-            if tab == u32::MAX {
-                // The shim's %COCKPIT_TAB_ID% did not expand: the hook ran in
-                // an environment that never inherited the tab identity.
-                gwlog(&format!("{path} with unresolved tab id: {:?}", q.get("tab")));
-            }
 
             let mut body = String::new();
             // Hook payloads are small JSON; cap defensively at 1MB.
@@ -67,14 +68,14 @@ pub fn start(app: AppHandle) -> Result<Gateway, String> {
 
             match path.as_str() {
                 "/status" => {
-                    gwlog(&format!("status tab={tab} {}B", body.len()));
+                    gwlog(&format!("status {}B", body.len()));
                     let line = render_status_line(&body);
-                    let _ = app.emit("cockpit-status", HookEvent { tab, raw: body });
+                    let _ = app.emit("cockpit-status", HookEvent { raw: body });
                     let _ = req.respond(resp(200, &line));
                 }
                 "/tool" => {
-                    gwlog(&format!("tool tab={tab} {}B", body.len()));
-                    let _ = app.emit("cockpit-tool", HookEvent { tab, raw: body });
+                    gwlog(&format!("tool {}B", body.len()));
+                    let _ = app.emit("cockpit-tool", HookEvent { raw: body });
                     let _ = req.respond(resp(200, ""));
                 }
                 _ => {
@@ -84,7 +85,132 @@ pub fn start(app: AppHandle) -> Result<Gateway, String> {
         }
     });
 
-    Ok(Gateway { port, token, dir })
+    Ok(Gateway { port, dir })
+}
+
+/// Fixed range so the installed command survives restarts; scan handles a
+/// squatter on the preferred port.
+fn bind_fixed_range() -> Result<tiny_http::Server, String> {
+    for p in PORT_RANGE {
+        if let Ok(s) = tiny_http::Server::http(("127.0.0.1", p)) {
+            return Ok(s);
+        }
+    }
+    Err("no free port in cockpit gateway range".into())
+}
+
+/// Token survives restarts for the same reason. Loopback-only listener; the
+/// token merely stops another local process from casually spraying events.
+fn persistent_token(dir: &Path) -> Result<String, String> {
+    let f = dir.join("token");
+    if let Ok(t) = std::fs::read_to_string(&f) {
+        let t = t.trim().to_string();
+        if t.len() >= 16 {
+            return Ok(t);
+        }
+    }
+    let t = random_token();
+    std::fs::write(&f, &t).map_err(|e| e.to_string())?;
+    Ok(t)
+}
+
+fn hook_cmd(port: u16, token: &str, route: &str) -> String {
+    // No env vars, no redirects, no operators: shell-agnostic on purpose.
+    // -m 2 so a dead gateway can never wedge Claude's render loop; connection
+    // refused fails in milliseconds when Cockpit is closed.
+    format!("curl.exe -s -m 2 --data-binary @- \"http://127.0.0.1:{port}/{route}?token={token}\"")
+}
+
+fn is_ours(cmd: &str) -> bool {
+    cmd.contains("cockpit-hooks") // legacy .cmd shims
+        || (cmd.contains("127.0.0.1") && (cmd.contains("/status?token=") || cmd.contains("/tool?token=")))
+}
+
+/// Merge statusLine + PostToolUse into ~/.claude/settings.json. Rules: back up
+/// the original once, replace only entries that are ours (legacy shims
+/// included), never duplicate, leave a foreign statusLine untouched.
+fn install_user_settings(port: u16, token: &str) -> Result<(), String> {
+    let home = std::env::var("USERPROFILE").map_err(|e| e.to_string())?;
+    let file = Path::new(&home).join(".claude").join("settings.json");
+    std::fs::create_dir_all(file.parent().unwrap()).map_err(|e| e.to_string())?;
+
+    let mut v: serde_json::Value = match std::fs::read_to_string(&file) {
+        Ok(s) => serde_json::from_str(&s)
+            .map_err(|e| format!("user settings unparseable, not touching it: {e}"))?,
+        Err(_) => serde_json::json!({}),
+    };
+    let backup = file.with_extension("json.pre-cockpit");
+    if file.exists() && !backup.exists() {
+        std::fs::copy(&file, &backup).map_err(|e| e.to_string())?;
+    }
+
+    let status_cmd = hook_cmd(port, token, "status");
+    let tool_cmd = hook_cmd(port, token, "tool");
+    let mut changed = false;
+
+    let cur_status = v
+        .pointer("/statusLine/command")
+        .and_then(|c| c.as_str())
+        .unwrap_or("")
+        .to_string();
+    if cur_status.is_empty() || is_ours(&cur_status) {
+        if cur_status != status_cmd {
+            v["statusLine"] = serde_json::json!({ "type": "command", "command": status_cmd });
+            changed = true;
+        }
+    } else {
+        gwlog(&format!("foreign statusLine present, leaving it alone: {cur_status}"));
+    }
+
+    if v.get("hooks").map(|h| !h.is_object()).unwrap_or(true) {
+        v["hooks"] = serde_json::json!({});
+    }
+    let arr = v["hooks"]
+        .as_object_mut()
+        .unwrap()
+        .entry("PostToolUse")
+        .or_insert_with(|| serde_json::json!([]));
+    if let Some(a) = arr.as_array_mut() {
+        let before = a.len();
+        a.retain(|e| {
+            !e.pointer("/hooks")
+                .and_then(|h| h.as_array())
+                .map(|hs| {
+                    hs.iter().any(|h| {
+                        h.pointer("/command")
+                            .and_then(|c| c.as_str())
+                            .map(|c| is_ours(c) && c != tool_cmd)
+                            .unwrap_or(false)
+                    })
+                })
+                .unwrap_or(false)
+        });
+        changed |= a.len() != before;
+        let present = a.iter().any(|e| {
+            e.pointer("/hooks")
+                .and_then(|h| h.as_array())
+                .map(|hs| {
+                    hs.iter().any(|h| {
+                        h.pointer("/command").and_then(|c| c.as_str()) == Some(tool_cmd.as_str())
+                    })
+                })
+                .unwrap_or(false)
+        });
+        if !present {
+            a.push(serde_json::json!({
+                "matcher": "Edit|Write|MultiEdit|NotebookEdit",
+                "hooks": [{ "type": "command", "command": tool_cmd }]
+            }));
+            changed = true;
+        }
+    }
+
+    if changed {
+        std::fs::write(&file, serde_json::to_string_pretty(&v).unwrap())
+            .map_err(|e| e.to_string())?;
+        gwlog("installed/updated cockpit statusLine + PostToolUse in user settings");
+    }
+    Ok(())
 }
 
 /// What the Claude TUI's own status line shows. The gateway is the statusLine
@@ -114,68 +240,20 @@ fn render_status_line(body: &str) -> String {
     parts.join(" | ")
 }
 
-fn write_artifacts(dir: &PathBuf, port: u16, token: &str) -> Result<(), String> {
-    let curl = r"%SystemRoot%\System32\curl.exe";
-    let status_cmd = dir.join("hook-status.cmd");
-    let tool_cmd = dir.join("hook-tool.cmd");
-    let settings = dir.join("settings.json");
-    let init = dir.join("init.ps1");
-
-    // .cmd shims guarantee cmd.exe semantics for %VAR% expansion no matter how
-    // the parent process invokes hooks. -m 2 so a dead gateway never wedges
-    // Claude's render loop.
-    // These shims are wired into the USER settings (see install_user_settings)
-    // because Claude Code does not trust statusLine/hooks from --settings
-    // files. The guard makes them free in Claude sessions outside Cockpit.
-    std::fs::write(
-        &status_cmd,
-        format!(
-            "@if not defined COCKPIT_TAB_ID exit /b 0\r\n@{curl} -s -m 2 --data-binary @- \"http://127.0.0.1:{port}/status?tab=%COCKPIT_TAB_ID%&token={token}\"\r\n"
-        ),
-    )
-    .map_err(|e| e.to_string())?;
-    std::fs::write(
-        &tool_cmd,
-        format!(
-            "@if not defined COCKPIT_TAB_ID exit /b 0\r\n@{curl} -s -m 2 --data-binary @- \"http://127.0.0.1:{port}/tool?tab=%COCKPIT_TAB_ID%&token={token}\" >nul\r\n"
-        ),
-    )
-    .map_err(|e| e.to_string())?;
-    install_user_settings(&status_cmd, &tool_cmd)?;
-
-    let settings_json = serde_json::json!({
-        "statusLine": { "type": "command", "command": status_cmd.to_string_lossy() },
-        "hooks": {
-            "PostToolUse": [{
-                "matcher": "Edit|Write|MultiEdit|NotebookEdit",
-                "hooks": [{ "type": "command", "command": tool_cmd.to_string_lossy() }]
-            }]
-        }
-    });
-    std::fs::write(
-        &settings,
-        serde_json::to_string_pretty(&settings_json).unwrap(),
-    )
-    .map_err(|e| e.to_string())?;
-
-    // Hooks now ride in via user settings (install_user_settings), so the
-    // shell init only carries PSReadLine predictions and the banner. The
-    // try/catch ladder: HistoryAndPlugin needs pwsh 7, History works on any
-    // PSReadLine 2.1+, and Windows PowerShell 5 just skips both.
-    let init_ps1 = r#"# Generated by Cockpit on every launch. Do not edit; edits are overwritten.
+fn write_init_script(dir: &Path) -> Result<(), String> {
+    // PSReadLine try/catch ladder: HistoryAndPlugin needs pwsh 7, History works
+    // on any PSReadLine 2.1+, Windows PowerShell 5 skips both.
+    let init = r#"# Generated by Cockpit on every launch. Do not edit; edits are overwritten.
 try { Set-PSReadLineOption -PredictionSource HistoryAndPlugin -ErrorAction Stop }
 catch { try { Set-PSReadLineOption -PredictionSource History -ErrorAction Stop } catch {} }
 try { Set-PSReadLineOption -PredictionViewStyle InlineView } catch {}
-Write-Host "cockpit session | tab $env:COCKPIT_TAB_ID | hooks active" -ForegroundColor DarkCyan
+Write-Host "cockpit session | hooks active" -ForegroundColor DarkCyan
 "#;
-    std::fs::write(&init, init_ps1).map_err(|e| e.to_string())?;
-    let _ = &settings; // still generated for --settings power users / debugging
-    Ok(())
+    std::fs::write(dir.join("init.ps1"), init).map_err(|e| e.to_string())
 }
 
-/// Gateway diagnostics into the same trace file everything else uses. This is
-/// how "the status bar is empty" gets diagnosed: no line here means the hook
-/// never fired; a line with a wrong tab means env inheritance broke.
+/// Gateway diagnostics into the shared trace file. This is how "the status bar
+/// is empty" gets diagnosed: no line here means the hook never fired.
 fn gwlog(m: &str) {
     use std::io::Write;
     if let Ok(mut f) = std::fs::OpenOptions::new()
@@ -185,82 +263,6 @@ fn gwlog(m: &str) {
     {
         let _ = writeln!(f, "[gw] {m}");
     }
-}
-
-/// Merge the statusLine + PostToolUse entries into ~/.claude/settings.json.
-/// Rules: back up the original once, never replace a statusLine we did not
-/// write, never duplicate the hook entry. Shim paths are stable across runs
-/// (only their contents change per run), so this converges after one install.
-fn install_user_settings(status_cmd: &Path, tool_cmd: &Path) -> Result<(), String> {
-    let home = std::env::var("USERPROFILE").map_err(|e| e.to_string())?;
-    let file = Path::new(&home).join(".claude").join("settings.json");
-    std::fs::create_dir_all(file.parent().unwrap()).map_err(|e| e.to_string())?;
-
-    let mut v: serde_json::Value = match std::fs::read_to_string(&file) {
-        Ok(s) => serde_json::from_str(&s).map_err(|e| format!("user settings unparseable, not touching it: {e}"))?,
-        Err(_) => serde_json::json!({}),
-    };
-    let backup = file.with_extension("json.pre-cockpit");
-    if file.exists() && !backup.exists() {
-        std::fs::copy(&file, &backup).map_err(|e| e.to_string())?;
-    }
-
-    let status_str = status_cmd.to_string_lossy().to_string();
-    let tool_str = tool_cmd.to_string_lossy().to_string();
-    let mut changed = false;
-
-    match v.get("statusLine") {
-        None => {
-            v["statusLine"] = serde_json::json!({ "type": "command", "command": status_str });
-            changed = true;
-        }
-        Some(existing) => {
-            let cur = existing.pointer("/command").and_then(|c| c.as_str()).unwrap_or("");
-            if cur != status_str && !cur.contains("cockpit-hooks") {
-                gwlog(&format!("foreign statusLine present, leaving it alone: {cur}"));
-            }
-        }
-    }
-
-    let post = v
-        .pointer_mut("/hooks")
-        .and_then(|h| h.as_object_mut())
-        .map(|_| ())
-        .is_some();
-    if !post {
-        v["hooks"] = serde_json::json!({});
-    }
-    let hooks = v["hooks"].as_object_mut().unwrap();
-    let arr = hooks
-        .entry("PostToolUse")
-        .or_insert_with(|| serde_json::json!([]));
-    let already = arr
-        .as_array()
-        .map(|a| {
-            a.iter().any(|e| {
-                e.pointer("/hooks")
-                    .and_then(|h| h.as_array())
-                    .map(|hs| hs.iter().any(|h| h.pointer("/command").and_then(|c| c.as_str()) == Some(tool_str.as_str())))
-                    .unwrap_or(false)
-            })
-        })
-        .unwrap_or(false);
-    if !already {
-        if let Some(a) = arr.as_array_mut() {
-            a.push(serde_json::json!({
-                "matcher": "Edit|Write|MultiEdit|NotebookEdit",
-                "hooks": [{ "type": "command", "command": tool_str }]
-            }));
-            changed = true;
-        }
-    }
-
-    if changed {
-        std::fs::write(&file, serde_json::to_string_pretty(&v).unwrap())
-            .map_err(|e| e.to_string())?;
-        gwlog("installed cockpit statusLine + PostToolUse into user settings");
-    }
-    Ok(())
 }
 
 fn resp(code: u16, body: &str) -> tiny_http::Response<std::io::Cursor<Vec<u8>>> {
@@ -275,8 +277,6 @@ fn parse_query(q: &str) -> std::collections::HashMap<String, String> {
 }
 
 fn random_token() -> String {
-    // No rand crate: hash a few entropy sources. Casual-collision-proof is all
-    // this needs to be (see start()).
     use std::hash::{Hash, Hasher};
     let mut h = std::collections::hash_map::DefaultHasher::new();
     std::time::SystemTime::now().hash(&mut h);
@@ -297,13 +297,12 @@ impl PathResolverExt for AppHandle {
     }
 }
 
-/// The frontend needs the init script path to spawn shells, and shows the port
-/// in a diagnostics tooltip.
+/// The frontend needs the init script path to spawn shells; the port shows in
+/// the status bar while no session has reported yet.
 #[derive(serde::Serialize)]
 pub struct GatewayInfo {
     port: u16,
     init_ps1: String,
-    settings_json: String,
 }
 
 #[tauri::command]
@@ -311,6 +310,5 @@ pub fn gateway_info(state: tauri::State<'_, Gateway>) -> GatewayInfo {
     GatewayInfo {
         port: state.port,
         init_ps1: state.dir.join("init.ps1").to_string_lossy().to_string(),
-        settings_json: state.dir.join("settings.json").to_string_lossy().to_string(),
     }
 }
