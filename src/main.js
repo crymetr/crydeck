@@ -82,6 +82,18 @@ async function newSession(cwd) {
     const text = s.decoder.decode(bytes, { stream: true });
     s.term.write(text);
     scanUrls(s, text);
+    // Attention tracking: a background tab shows a blue pulse while its Claude
+    // is producing output, flipping to amber once it goes quiet (finished, or
+    // waiting on you). A BEL rings amber immediately.
+    s.lastOut = Date.now();
+    if (s !== active && s.tabEl) {
+      if (text.includes('\x07')) {
+        s.tabEl.classList.remove('busy');
+        s.tabEl.classList.add('attn');
+      } else if (!s.tabEl.classList.contains('attn')) {
+        s.tabEl.classList.add('busy');
+      }
+    }
   };
 
   const args = ['-NoLogo', '-NoExit', '-ExecutionPolicy', 'Bypass', '-Command', `. '${gw.init_ps1}'`];
@@ -157,6 +169,7 @@ function activate(s) {
   for (const o of sessions.values()) {
     o.box.classList.toggle('active', o === s);
     o.tabEl?.classList.toggle('active', o === s);
+    if (o === s) o.tabEl?.classList.remove('busy', 'attn');
     o.tree.el.style.display = o === s ? '' : 'none';
     if (o.iframe) o.iframe.style.display = 'none';
   }
@@ -189,7 +202,7 @@ window.addEventListener('resize', scheduleResize);
 function makeTab(s) {
   const el = document.createElement('div');
   el.className = 'tab';
-  el.innerHTML = `<span class="name">${esc(basename(s.cwd))}</span><button class="close" title="Close session">×</button>`;
+  el.innerHTML = `<span class="badge"></span><span class="name">${esc(basename(s.cwd))}</span><button class="close" title="Close session">×</button>`;
   el.title = s.cwd;
   el.onclick = () => activate(s);
   el.querySelector('.close').onclick = (ev) => {
@@ -373,8 +386,20 @@ function setPvMode(mode, force = false) {
 for (const b of document.querySelectorAll('#pv-modes button'))
   b.onclick = () => setPvMode(b.dataset.mode);
 
+function diffHtml(d) {
+  return d.split('\n').map((l) => {
+    const e = esc(l);
+    if (l.startsWith('+++') || l.startsWith('---') || l.startsWith('diff ') || l.startsWith('index ')) return `<span class="dmeta">${e}</span>`;
+    if (l.startsWith('@@')) return `<span class="dhunk">${e}</span>`;
+    if (l.startsWith('+')) return `<span class="dadd">${e}</span>`;
+    if (l.startsWith('-')) return `<span class="ddel">${e}</span>`;
+    return e;
+  }).join('\n');
+}
+
 function showFile(s, path) {
   s.pvFile = path;
+  s.pvView = null; // re-decide content-vs-diff per file
   const np = norm(path);
   if (s.changed.has(np) && !s.seen.has(np)) {
     s.seen.add(np);
@@ -386,10 +411,37 @@ function showFile(s, path) {
 async function renderFile(s) {
   const pane = $('pv-file');
   pane.innerHTML = `<div class="path">${esc(s.pvFile)}</div><div class="content"><div class="note">loading…</div></div>`;
-  let c;
-  try { c = await invoke('fs_read', { path: s.pvFile }); }
-  catch (e) { pane.querySelector('.content').innerHTML = `<div class="note">${esc(String(e))}</div>`; return; }
+  let c, diff;
+  try {
+    [c, diff] = await Promise.all([
+      invoke('fs_read', { path: s.pvFile }),
+      invoke('git_diff', { root: s.cwd, path: s.pvFile }).catch(() => ''),
+    ]);
+  } catch (e) { pane.querySelector('.content').innerHTML = `<div class="note">${esc(String(e))}</div>`; return; }
   if (s !== active || s.pvMode !== 'file') return;
+
+  // A dirty file gets a Content|Diff switch; freshly-Claude-changed files
+  // default to the diff, because "what did it just do" is the actual question.
+  if (diff && c.kind === 'text') {
+    if (s.pvView == null) s.pvView = s.changed.has(norm(s.pvFile)) ? 'diff' : 'content';
+    const bar = document.createElement('div');
+    bar.className = 'viewsel';
+    for (const v of ['content', 'diff']) {
+      const b = document.createElement('button');
+      b.textContent = v === 'content' ? 'Content' : 'Diff';
+      b.classList.toggle('on', s.pvView === v);
+      b.onclick = () => { s.pvView = v; renderFile(s); };
+      bar.appendChild(b);
+    }
+    pane.insertBefore(bar, pane.querySelector('.content'));
+    if (s.pvView === 'diff') {
+      const pre = document.createElement('pre');
+      pre.className = 'diff';
+      pre.innerHTML = diffHtml(diff);
+      pane.querySelector('.content').replaceChildren(pre);
+      return;
+    }
+  }
   const content = pane.querySelector('.content');
   if (c.kind === 'text') {
     const isMd = /\.(md|markdown)$/i.test(s.pvFile);
@@ -579,6 +631,17 @@ function renderStatus() {
   el.classList.toggle('stale', Date.now() - active.statusAt > 120000);
 }
 setInterval(renderStatus, 15000);
+
+// Busy -> attention when a background session's output has been quiet for 3s.
+setInterval(() => {
+  for (const s of sessions.values()) {
+    if (s === active || !s.tabEl) continue;
+    if (s.tabEl.classList.contains('busy') && Date.now() - (s.lastOut || 0) > 3000) {
+      s.tabEl.classList.remove('busy');
+      s.tabEl.classList.add('attn');
+    }
+  }
+}, 1000);
 
 // Minimal floating context menu; dies on any click or Escape.
 function contextMenu(ev, items) {

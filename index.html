@@ -32,6 +32,10 @@
   .tab .close { border: none; background: none; color: inherit; cursor: pointer;
     padding: 0 2px; font-size: 13px; border-radius: 3px; }
   .tab .close:hover { background: #3a2020; color: #ff7b7b; }
+  .tab .badge { width: 7px; height: 7px; border-radius: 50%; display: none; flex: 0 0 auto; }
+  .tab.busy .badge { display: inline-block; background: var(--accent); animation: tabpulse 1.2s ease-in-out infinite; }
+  .tab.attn .badge { display: inline-block; background: var(--changed); }
+  @keyframes tabpulse { 0%,100% { opacity: .35; } 50% { opacity: 1; } }
   #newtab { border: 1px dashed var(--line); background: none; color: var(--dim);
     border-radius: 6px 6px 0 0; padding: 0 12px; cursor: pointer; font: inherit; }
   #newtab:hover { color: var(--fg); border-color: #45454f; }
@@ -90,6 +94,15 @@
     white-space: nowrap; overflow: hidden; text-overflow: ellipsis; direction: rtl;
     text-align: left; flex: 0 0 auto; }
   #pv-file .content { flex: 1; overflow: auto; }
+  #pv-file .viewsel { display: flex; gap: 2px; padding: 4px 6px; flex: 0 0 auto;
+    border-bottom: 1px solid var(--line); }
+  #pv-file .viewsel button { flex: 1; font: inherit; padding: 2px 0; background: var(--bg3);
+    color: var(--dim); border: 1px solid var(--line); border-radius: 4px; cursor: pointer; }
+  #pv-file .viewsel button.on { color: var(--fg); background: #24304a; border-color: #35507a; }
+  #pv-file pre.diff .dadd { color: #9fce9f; background: rgba(46,125,50,.14); display: inline-block; width: 100%; }
+  #pv-file pre.diff .ddel { color: #d09090; background: rgba(198,40,40,.12); display: inline-block; width: 100%; }
+  #pv-file pre.diff .dhunk { color: #6f8fd0; }
+  #pv-file pre.diff .dmeta { color: var(--dim); }
   #pv-file pre { margin: 0; padding: 8px; font: 11.5px/1.5 "Cascadia Mono", Consolas, monospace;
     white-space: pre; }
   #pv-file .md { padding: 10px 14px; font-size: 13px; }

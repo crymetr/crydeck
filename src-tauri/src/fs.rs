@@ -182,6 +182,27 @@ pub fn git_status(root: String) -> Vec<String> {
     result
 }
 
+/// Unified diff for one file vs HEAD; untracked files diff against nothing so
+/// the whole file shows as added. Empty string = no diff (clean, or no git).
+#[tauri::command]
+pub fn git_diff(root: String, path: String) -> String {
+    let run = |args: &[&str], allow_one: bool| {
+        std::process::Command::new("git")
+            .args(args)
+            .output()
+            .ok()
+            .filter(|o| o.status.success() || (allow_one && o.status.code() == Some(1)))
+            .map(|o| String::from_utf8_lossy(&o.stdout).to_string())
+            .unwrap_or_default()
+    };
+    let d = run(&["-C", &root, "diff", "HEAD", "--", &path], false);
+    if !d.is_empty() {
+        return d;
+    }
+    // Untracked file: --no-index exits 1 when there ARE differences.
+    run(&["-C", &root, "diff", "--no-index", "--", "NUL", &path], true)
+}
+
 /// Double-click a file: hand it to whatever the OS associates with it.
 /// `cmd /c start` resolves associations; the empty "" is start's window title
 /// slot, without it a quoted path is eaten as the title.
