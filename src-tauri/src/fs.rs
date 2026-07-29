@@ -153,6 +153,35 @@ fn base64_encode(bytes: &[u8]) -> String {
     out
 }
 
+/// Uncommitted paths (modified + untracked) for a session root, absolute.
+/// Empty on any failure: not a repo, no git, whatever — decoration only.
+#[tauri::command]
+pub fn git_status(root: String) -> Vec<String> {
+    let out = match std::process::Command::new("git")
+        .args(["-C", &root, "status", "--porcelain", "-z"])
+        .output()
+    {
+        Ok(o) if o.status.success() => o.stdout,
+        _ => return Vec::new(),
+    };
+    let text = String::from_utf8_lossy(&out);
+    let mut result = Vec::new();
+    let mut chunks = text.split('\0');
+    while let Some(c) = chunks.next() {
+        if c.len() < 4 {
+            continue;
+        }
+        let (xy, path) = c.split_at(3);
+        // Rename/copy entries carry the old path in the next chunk; skip it.
+        if xy.starts_with('R') || xy.starts_with('C') {
+            let _ = chunks.next();
+        }
+        let p = path.trim_end_matches('/').replace('/', "\\");
+        result.push(format!("{}\\{}", root.trim_end_matches(['\\', '/']), p));
+    }
+    result
+}
+
 /// Double-click a file: hand it to whatever the OS associates with it.
 /// `cmd /c start` resolves associations; the empty "" is start's window title
 /// slot, without it a quoted path is eaten as the title.

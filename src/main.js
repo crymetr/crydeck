@@ -65,6 +65,7 @@ async function newSession(cwd) {
     decoder: new TextDecoder('utf-8', { fatal: false }),
     changed: new Set(),      // norm paths Claude edited this session
     seen: new Set(),         // subset of changed the user has opened since
+    gitDirty: new Set(),     // uncommitted paths (decoration, refreshed with tree)
     feed: [],                // { kind:'url'|'file', value, at }
     seenUrls: new Set(),
     status: null, statusAt: 0,
@@ -255,15 +256,19 @@ function buildTree(s) {
         if (!c.startsWith(np)) continue;
         if (s.seen.has(c)) seen = true; else unseen = true;
       }
-      return unseen ? 'changed' : seen ? 'seen' : null;
+      if (unseen) return 'changed';
+      if (seen) return 'seen';
+      for (const g of s.gitDirty) if (g.startsWith(np) || g === norm(p)) return 'git';
+      return null;
     }
     const np = norm(p);
-    if (!s.changed.has(np)) return null;
-    return s.seen.has(np) ? 'seen' : 'changed';
+    if (s.changed.has(np)) return s.seen.has(np) ? 'seen' : 'changed';
+    return s.gitDirty.has(np) ? 'git' : null;
   }
   function applyMark(el, mark) {
     el.classList.toggle('changed', mark === 'changed');
     el.classList.toggle('seen', mark === 'seen');
+    el.classList.toggle('git', mark === 'git');
   }
   function recomputeMarks() {
     for (const rec of nodeByPath.values()) applyMark(rec.el, markFor(rec.p, rec.isDir));
@@ -331,6 +336,10 @@ function buildTree(s) {
     selected = null;
     renderInto(rootKids, s.cwd);
     syncWatch();
+    invoke('git_status', { root: s.cwd }).then((list) => {
+      s.gitDirty = new Set(list.map(norm));
+      recomputeMarks();
+    }).catch(() => {});
   }
   refresh();
 

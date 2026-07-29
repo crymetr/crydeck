@@ -21,6 +21,7 @@ pub fn run() {
       fs::os_explore,
       fs::pick_folder,
       fs::boot_folder,
+      fs::git_status,
       hooks::gateway_info,
       watch::fs_watch_dirs,
       watch::fs_unwatch,

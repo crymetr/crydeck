@@ -13,7 +13,92 @@ use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
 use portable_pty::{Child, CommandBuilder, MasterPty, NativePtySystem, PtySize, PtySystem};
+use std::sync::Arc;
 use tauri::ipc::{Channel, InvokeResponseBody};
+
+/// Windows Job Object with kill-on-close. Every session's shell is assigned to
+/// one, so children spawned later (claude, node, MCP servers) inherit
+/// membership and die together — even if this app crashes, since the OS closes
+/// the handle and KILL_ON_JOB_CLOSE does the rest.
+mod job {
+    use windows::Win32::Foundation::{CloseHandle, HANDLE};
+    use windows::Win32::System::JobObjects::{
+        AssignProcessToJobObject, CreateJobObjectW, JobObjectExtendedLimitInformation,
+        SetInformationJobObject, TerminateJobObject, JOBOBJECT_EXTENDED_LIMIT_INFORMATION,
+        JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
+    };
+    use windows::Win32::System::Threading::{
+        OpenProcess, OpenThread, PROCESS_SET_QUOTA, PROCESS_TERMINATE, THREAD_TERMINATE,
+    };
+    use windows::Win32::System::IO::CancelSynchronousIo;
+
+    pub struct Job(HANDLE);
+    unsafe impl Send for Job {}
+    unsafe impl Sync for Job {}
+
+    impl Job {
+        pub fn assign(pid: u32) -> Option<Job> {
+            unsafe {
+                let jobh = CreateJobObjectW(None, None).ok()?;
+                let mut info = JOBOBJECT_EXTENDED_LIMIT_INFORMATION::default();
+                info.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+                if SetInformationJobObject(
+                    jobh,
+                    JobObjectExtendedLimitInformation,
+                    &info as *const _ as *const _,
+                    std::mem::size_of::<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>() as u32,
+                )
+                .is_err()
+                {
+                    let _ = CloseHandle(jobh);
+                    return None;
+                }
+                let proc = match OpenProcess(PROCESS_SET_QUOTA | PROCESS_TERMINATE, false, pid) {
+                    Ok(p) => p,
+                    Err(_) => {
+                        let _ = CloseHandle(jobh);
+                        return None;
+                    }
+                };
+                let ok = AssignProcessToJobObject(jobh, proc).is_ok();
+                let _ = CloseHandle(proc);
+                if !ok {
+                    let _ = CloseHandle(jobh);
+                    return None;
+                }
+                Some(Job(jobh))
+            }
+        }
+        pub fn terminate(&self) {
+            unsafe {
+                let _ = TerminateJobObject(self.0, 1);
+            }
+        }
+    }
+    impl Drop for Job {
+        fn drop(&mut self) {
+            unsafe {
+                let _ = CloseHandle(self.0);
+            }
+        }
+    }
+
+    /// ConPTY never signals EOF to a cloned reader when the child exits, so a
+    /// closed session used to park its reader thread in read() forever
+    /// (Phase 0 defect 1). Cancelling the thread's synchronous IO unblocks it;
+    /// the loop sees the error and exits.
+    pub fn cancel_reader(tid: u32) {
+        if tid == 0 {
+            return;
+        }
+        unsafe {
+            if let Ok(h) = OpenThread(THREAD_TERMINATE, false, tid) {
+                let _ = CancelSynchronousIo(h);
+                let _ = CloseHandle(h);
+            }
+        }
+    }
+}
 
 /// Flush the batch once it reaches this many bytes.
 const BATCH_BYTES: usize = 32 * 1024;
@@ -32,6 +117,23 @@ pub struct Session {
     #[allow(dead_code)]
     output: Channel<InvokeResponseBody>,
     pid: Option<u32>,
+    job: Option<job::Job>,
+    reader_tid: Arc<std::sync::atomic::AtomicU32>,
+}
+
+/// Tear a session down completely: process tree first, then the parked reader.
+/// The pty master drops with the Session value, which closes the pseudoconsole.
+fn kill_session(mut s: Session) {
+    if let Some(j) = &s.job {
+        j.terminate();
+    } else if let Some(pid) = s.pid {
+        // Job assignment failed at spawn (rare); taskkill walks the tree.
+        let _ = std::process::Command::new("taskkill")
+            .args(["/T", "/F", "/PID", &pid.to_string()])
+            .output();
+    }
+    let _ = s.child.kill();
+    job::cancel_reader(s.reader_tid.load(Ordering::Relaxed));
 }
 
 #[derive(Default)]
@@ -80,6 +182,11 @@ pub fn pty_spawn(
         .spawn_command(builder)
         .map_err(|e| format!("spawn '{cmd}' failed: {e}"))?;
     let pid = child.process_id();
+    let job = pid.and_then(job::Job::assign);
+    if job.is_none() {
+        let _ = bench_report(format!("[pty] session {id}: job object unavailable, taskkill fallback"));
+    }
+    let reader_tid = Arc::new(std::sync::atomic::AtomicU32::new(0));
 
     let writer = pair
         .master
@@ -94,7 +201,12 @@ pub fn pty_spawn(
     // InvokeResponseBody::Raw lands in JS as an ArrayBuffer, so there is no
     // JSON encode/decode of terminal output on the hot path.
     let out = on_output.clone();
+    let tid_slot = reader_tid.clone();
     std::thread::spawn(move || {
+        tid_slot.store(
+            unsafe { windows::Win32::System::Threading::GetCurrentThreadId() },
+            Ordering::Relaxed,
+        );
         let mut buf = vec![0u8; READ_BUF];
         let mut batch: Vec<u8> = Vec::with_capacity(READ_BUF);
         let mut last_flush = Instant::now();
@@ -159,6 +271,8 @@ pub fn pty_spawn(
             child,
             output: on_output,
             pid,
+            job,
+            reader_tid,
         },
     );
 
@@ -201,18 +315,9 @@ pub fn pty_resize(
 
 #[tauri::command]
 pub fn pty_kill(state: tauri::State<'_, PtyState>, id: u32) -> Result<(), String> {
-    let mut sessions = state.sessions.lock().unwrap();
-    if let Some(mut s) = sessions.remove(&id) {
-        // Claude spawns node, MCP servers and tool subprocesses. Killing only the
-        // direct child leaks all of them. taskkill /T walks the tree.
-        // Phase 2 replaces this with a real Job Object, which is leak-proof even
-        // if the app crashes.
-        if let Some(pid) = s.pid {
-            let _ = std::process::Command::new("taskkill")
-                .args(["/T", "/F", "/PID", &pid.to_string()])
-                .output();
-        }
-        let _ = s.child.kill();
+    let removed = state.sessions.lock().unwrap().remove(&id);
+    if let Some(s) = removed {
+        kill_session(s);
     }
     Ok(())
 }
@@ -223,14 +328,12 @@ pub fn pty_kill(state: tauri::State<'_, PtyState>, id: u32) -> Result<(), String
 /// pwsh/claude/node processes. Boot calls this before restoring.
 #[tauri::command]
 pub fn pty_kill_all(state: tauri::State<'_, PtyState>) {
-    let mut sessions = state.sessions.lock().unwrap();
-    for (_, mut s) in sessions.drain() {
-        if let Some(pid) = s.pid {
-            let _ = std::process::Command::new("taskkill")
-                .args(["/T", "/F", "/PID", &pid.to_string()])
-                .output();
-        }
-        let _ = s.child.kill();
+    let drained: Vec<Session> = {
+        let mut sessions = state.sessions.lock().unwrap();
+        sessions.drain().map(|(_, s)| s).collect()
+    };
+    for s in drained {
+        kill_session(s);
     }
 }
 
