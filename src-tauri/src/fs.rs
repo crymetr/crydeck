@@ -2,7 +2,17 @@
 // workspace, Claude does. The only writes here are OS-open handoffs.
 
 use serde::Serialize;
+use std::os::windows::process::CommandExt;
 use std::path::{Path, PathBuf};
+
+/// Every process a GUI app spawns pops a console window unless told not to.
+pub const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+
+pub fn quiet(cmd: &str) -> std::process::Command {
+    let mut c = std::process::Command::new(cmd);
+    c.creation_flags(CREATE_NO_WINDOW);
+    c
+}
 
 /// Preview refuses anything bigger than this. The pane is a viewer, not a pager.
 const MAX_TEXT_BYTES: u64 = 1_048_576; // 1MB
@@ -157,7 +167,7 @@ fn base64_encode(bytes: &[u8]) -> String {
 /// Empty on any failure: not a repo, no git, whatever — decoration only.
 #[tauri::command]
 pub fn git_status(root: String) -> Vec<String> {
-    let out = match std::process::Command::new("git")
+    let out = match quiet("git")
         .args(["-C", &root, "status", "--porcelain", "-z"])
         .output()
     {
@@ -187,7 +197,7 @@ pub fn git_status(root: String) -> Vec<String> {
 #[tauri::command]
 pub fn git_diff(root: String, path: String) -> String {
     let run = |args: &[&str], allow_one: bool| {
-        std::process::Command::new("git")
+        quiet("git")
             .args(args)
             .output()
             .ok()
@@ -208,7 +218,7 @@ pub fn git_diff(root: String, path: String) -> String {
 /// slot, without it a quoted path is eaten as the title.
 #[tauri::command]
 pub fn os_open(path: String) -> Result<(), String> {
-    std::process::Command::new("cmd")
+    quiet("cmd")
         .args(["/c", "start", "", &path])
         .spawn()
         .map_err(|e| e.to_string())?;
@@ -218,7 +228,7 @@ pub fn os_open(path: String) -> Result<(), String> {
 /// Double-click a folder: a fresh Explorer window there.
 #[tauri::command]
 pub fn os_explore(path: String) -> Result<(), String> {
-    std::process::Command::new("explorer")
+    quiet("explorer")
         .arg(&path)
         .spawn()
         .map_err(|e| e.to_string())?;

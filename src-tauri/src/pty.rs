@@ -128,7 +128,7 @@ fn kill_session(mut s: Session) {
         j.terminate();
     } else if let Some(pid) = s.pid {
         // Job assignment failed at spawn (rare); taskkill walks the tree.
-        let _ = std::process::Command::new("taskkill")
+        let _ = crate::fs::quiet("taskkill")
             .args(["/T", "/F", "/PID", &pid.to_string()])
             .output();
     }

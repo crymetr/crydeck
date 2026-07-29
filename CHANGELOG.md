@@ -3,6 +3,12 @@
 All notable changes to CryDeck. Format loosely follows Keep a Changelog;
 versions are git tags.
 
+## v0.6.1 - 2026-07-29
+
+### Fixed
+- Spawned processes (git, taskkill) no longer flash console windows (CREATE_NO_WINDOW).
+- File view renders content immediately; the diff attaches asynchronously instead of blocking with a loading state.
+
 ## v0.6.0 — 2026-07-29
 
 ### Added
@@ -77,3 +83,4 @@ versions are git tags.
 - Tauri + ConPTY + xterm.js viability spike: batched binary IPC, WebGL
   rendering, Unicode grapheme handling, throughput and memory measurements.
   Findings and defects recorded in PLAN.md.
+

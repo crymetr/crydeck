@@ -410,6 +410,7 @@ function diffHtml(d) {
 function showFile(s, path) {
   s.pvFile = path;
   s.pvView = null; // re-decide content-vs-diff per file
+  s.pvDiff = ''; s.pvDiffFor = null; // stale diff never survives a new click
   const np = norm(path);
   if (s.changed.has(np) && !s.seen.has(np)) {
     s.seen.add(np);
@@ -421,14 +422,21 @@ function showFile(s, path) {
 async function renderFile(s) {
   const pane = $('pv-file');
   pane.innerHTML = `<div class="path">${esc(s.pvFile)}</div><div class="content"><div class="note">loading…</div></div>`;
-  let c, diff;
-  try {
-    [c, diff] = await Promise.all([
-      invoke('fs_read', { path: s.pvFile }),
-      invoke('git_diff', { root: s.cwd, path: s.pvFile }).catch(() => ''),
-    ]);
-  } catch (e) { pane.querySelector('.content').innerHTML = `<div class="note">${esc(String(e))}</div>`; return; }
-  if (s !== active || s.pvMode !== 'file') return;
+  // Content renders the moment it's read; the diff is decoration that attaches
+  // when git answers. Blocking the viewer on a subprocess felt broken.
+  const file = s.pvFile;
+  let c;
+  try { c = await invoke('fs_read', { path: file }); }
+  catch (e) { pane.querySelector('.content').innerHTML = `<div class="note">${esc(String(e))}</div>`; return; }
+  if (s !== active || s.pvMode !== 'file' || s.pvFile !== file) return;
+  let diff = s.pvDiffFor === file ? s.pvDiff : '';
+  if (!diff) {
+    invoke('git_diff', { root: s.cwd, path: file }).then((d) => {
+      if (!d || s !== active || s.pvMode !== 'file' || s.pvFile !== file) return;
+      s.pvDiff = d; s.pvDiffFor = file;
+      renderFile(s); // re-render, now with the Content|Diff switch available
+    }).catch(() => {});
+  }
 
   // A dirty file gets a Content|Diff switch; freshly-Claude-changed files
   // default to the diff, because "what did it just do" is the actual question.
