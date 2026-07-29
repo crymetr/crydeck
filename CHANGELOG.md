@@ -3,6 +3,12 @@
 All notable changes to CryDeck. Format loosely follows Keep a Changelog;
 versions are git tags.
 
+## v0.7.0 - 2026-07-29
+
+### Added
+- Session continuity: restored tabs relaunch Claude with --continue, so closing the app no longer loses conversations, and closing the window now asks first when sessions are live.
+- Auto-continue scheduler: right-click a tab to schedule a 'continue' after the rate-limit reset (from statusLine resets_at) or a custom delay. Always user-set; countdown in the status bar, clock icon on the tab.
+
 ## v0.6.2 - 2026-07-29
 
 ### Fixed

@@ -8,6 +8,7 @@ import { UnicodeGraphemesAddon } from '@xterm/addon-unicode-graphemes';
 import { WebglAddon } from '@xterm/addon-webgl';
 import { invoke, Channel } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
+import { getCurrentWindow } from '@tauri-apps/api/window';
 import { marked } from 'marked';
 import '@xterm/xterm/css/xterm.css';
 
@@ -28,7 +29,7 @@ let active = null;             // session or null
 
 // ------------------------------------------------------------------ sessions
 
-async function newSession(cwd) {
+async function newSession(cwd, opts = {}) {
   if (sessions.size >= MAX_SESSIONS) {
     alert(`Session cap is ${MAX_SESSIONS}. Close a tab first.`);
     return null;
@@ -123,10 +124,13 @@ async function newSession(cwd) {
   });
 
   // A tab IS a Claude session: launch it once the shell has settled, with
-  // Remote Control on so the phone can pick any session up.
+  // Remote Control on so the phone can pick any session up. Restored tabs
+  // resume their folder's last conversation — closing the app kills the
+  // processes (by design), not the conversations.
+  const resume = opts.resume ? '--continue ' : '';
   setTimeout(() => {
     if (sessions.has(s.ptyId))
-      invoke('pty_write', { id: s.ptyId, data: `claude --remote-control "${basename(cwd)}"\r` });
+      invoke('pty_write', { id: s.ptyId, data: `claude ${resume}--remote-control "${basename(cwd)}"\r` });
   }, 2500);
 
   s.tree = buildTree(s);
@@ -149,6 +153,7 @@ async function newSession(cwd) {
 }
 
 function closeSession(s) {
+  cancelAutoCont(s);
   invoke('pty_kill', { id: s.ptyId }).catch(() => {});
   invoke('fs_unwatch', { tab: s.ptyId }).catch(() => {});
   sessions.delete(s.ptyId);
@@ -210,9 +215,26 @@ window.addEventListener('resize', scheduleResize);
 function makeTab(s) {
   const el = document.createElement('div');
   el.className = 'tab';
-  el.innerHTML = `<span class="badge"></span><span class="name">${esc(basename(s.cwd))}</span><button class="close" title="Close session">×</button>`;
+  el.innerHTML = `<span class="badge"></span><span class="name">${esc(basename(s.cwd))}</span><span class="schedicon">⏱</span><button class="close" title="Close session">×</button>`;
   el.title = s.cwd;
   el.onclick = () => activate(s);
+  el.oncontextmenu = (ev) => {
+    ev.preventDefault();
+    const items = [];
+    const resetsAt = parseResetsAt(s);
+    if (resetsAt && resetsAt > Date.now())
+      items.push([`Auto-continue at limit reset (${new Date(resetsAt + 60000).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' })})`,
+        () => setAutoCont(s, resetsAt + 60000)]);
+    for (const m of [30, 45, 60])
+      items.push([`Auto-continue in ${m} min`, () => setAutoCont(s, Date.now() + m * 60000)]);
+    items.push(['Auto-continue in custom minutes…', () => {
+      const v = parseInt(prompt('Minutes until "continue" is sent:', '45'), 10);
+      if (!isNaN(v) && v > 0) setAutoCont(s, Date.now() + v * 60000);
+    }]);
+    if (s.autoCont)
+      items.push([`Cancel auto-continue (${fmtIn(s.autoCont.at)})`, () => cancelAutoCont(s)]);
+    contextMenu(ev, items);
+  };
   el.querySelector('.close').onclick = (ev) => {
     ev.stopPropagation();
     closeSession(s);
@@ -227,6 +249,47 @@ async function pickAndOpen() {
   if (!folder) return;
   localStorage.setItem('cockpit.lastFolder', folder);
   await newSession(folder);
+}
+
+/* ---------- auto-continue scheduler (always user-set, never automatic) ---- */
+
+function parseResetsAt(s) {
+  const r = s.status?.rate_limits?.five_hour?.resets_at ?? s.status?.rate_limits?.weekly?.resets_at;
+  if (r == null) return null;
+  if (typeof r === 'number') return r < 1e12 ? r * 1000 : r; // seconds vs ms epoch
+  const t = Date.parse(r);
+  return isNaN(t) ? null : t;
+}
+
+const fmtIn = (at) => {
+  const m = Math.max(0, Math.round((at - Date.now()) / 60000));
+  return m >= 60 ? `in ${Math.floor(m / 60)}h ${m % 60}m` : `in ${m}m`;
+};
+
+function setAutoCont(s, at) {
+  cancelAutoCont(s);
+  s.autoCont = {
+    at,
+    timer: setTimeout(() => {
+      if (!sessions.has(s.ptyId)) return;
+      invoke('pty_write', { id: s.ptyId, data: 'continue\r' });
+      trace(`auto-continue fired for session ${s.ptyId}`);
+      s.autoCont = null;
+      s.tabEl?.classList.remove('sched');
+      if (s !== active) s.tabEl?.classList.add('attn');
+      renderStatus();
+    }, Math.max(1000, at - Date.now())),
+  };
+  s.tabEl?.classList.add('sched');
+  s.tabEl.querySelector('.schedicon').title = `Auto-continue ${fmtIn(at)} (${new Date(at).toLocaleTimeString('en-GB')})`;
+  renderStatus();
+}
+
+function cancelAutoCont(s) {
+  if (s.autoCont) clearTimeout(s.autoCont.timer);
+  s.autoCont = null;
+  s.tabEl?.classList.remove('sched');
+  renderStatus();
 }
 
 function persistTabs() {
@@ -765,6 +828,7 @@ function renderStatus() {
   if (wk) seg.push(`<span class="seg">week <b>${wk}</b></span>`);
   if (v.cost?.total_cost_usd != null) seg.push(`<span class="seg">cost <b>$${v.cost.total_cost_usd.toFixed(2)}</b></span>`);
   seg.push(`<span class="spacer"></span>`);
+  if (active.autoCont) seg.push(`<span class="seg warn">⏱ continue ${esc(fmtIn(active.autoCont.at))}</span>`);
   seg.push(`<span class="seg">${esc(basename(active.cwd))}</span>`);
   el.innerHTML = seg.join('');
   el.classList.toggle('stale', Date.now() - active.statusAt > 120000);
@@ -951,6 +1015,14 @@ document.addEventListener('contextmenu', (e) => e.preventDefault());
 
 // ------------------------------------------------------------------ boot
 
+// Closing the window kills every session's process tree (that is the leak
+// protection doing its job) — so make it a decision, not an accident. The
+// conversations themselves survive on disk and restore via --continue.
+getCurrentWindow().onCloseRequested((ev) => {
+  if (sessions.size && !confirm(`Close CryDeck? ${sessions.size} session(s) will stop.\nConversations resume on next launch.`))
+    ev.preventDefault();
+});
+
 async function boot() {
   // If the WebView reloaded anyway (crash recovery), the old shells are
   // orphans; reap them before spawning the restored set.
@@ -967,11 +1039,11 @@ async function boot() {
   let restored = [];
   try { restored = JSON.parse(localStorage.getItem('cockpit.tabs') || '[]'); } catch {}
   for (const cwd of restored.slice(0, MAX_SESSIONS)) {
-    try { await newSession(cwd); } catch (e) { trace(`restore ${cwd} failed: ${e}`); }
+    try { await newSession(cwd, { resume: true }); } catch (e) { trace(`restore ${cwd} failed: ${e}`); }
   }
   const cli = await invoke('boot_folder');
   if (cli && ![...sessions.values()].some((s) => norm(s.cwd) === norm(cli))) {
-    try { await newSession(cli); } catch (e) { trace(`cli open failed: ${e}`); }
+    try { await newSession(cli, { resume: true }); } catch (e) { trace(`cli open failed: ${e}`); }
   }
   if (!sessions.size) renderEmpty();
   trace('boot complete');
