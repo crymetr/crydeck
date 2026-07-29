@@ -3,6 +3,11 @@
 All notable changes to CryDeck. Format loosely follows Keep a Changelog;
 versions are git tags.
 
+## v0.8.0 - 2026-07-29
+
+### Added
+- Review queue (community-requested): a fourth preview mode grouping Claude's edits under the prompt that caused them (via a UserPromptSubmit hook). Unreviewed counts per task and on the Review button, click-through to diffs, per-task mark-all-reviewed. Shares the amber/green read-state with the tree.
+
 ## v0.7.0 - 2026-07-29
 
 ### Added

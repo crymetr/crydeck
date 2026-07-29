@@ -38,7 +38,7 @@ is the entire reason it stays light (~250MB working set, single small binary).
   markdown, images) with a **Content|Diff switch**; files Claude just changed
   default to the diff. *App*: a real embedded webview with page tabs; the
   first dev server the session starts loads automatically and stays alive
-  across tab switches. *Feed*: everything Claude produced, newest first.
+  across tab switches. *Feed*: everything Claude produced, newest first. *Review*: a supervision queue grouping edits under the prompt that caused them, with unreviewed counts and per-task sign-off.
 - **Point at things, literally.** Element select (🎯): click any element in
   the running app and its selector, text and position are typed into Claude's
   prompt. Annotations (✏️): draw numbered boxes on the page, hit Send, and

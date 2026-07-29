@@ -73,6 +73,7 @@ async function newSession(cwd, opts = {}) {
     pvMode: 'feed', pvFile: null,
     pages: [], pageIdx: -1, previewOpen: false, pickOn: false, annOn: false,
     shells: [], shellIdx: -1, shellsOpen: false,
+    tasks: [],               // { prompt, at, files:Set(norm), reviewed } — the review queue
     tree: null,              // built lazily below
     tabEl: null, lastSize: '',
   };
@@ -190,6 +191,7 @@ function activate(s) {
   requestAnimationFrame(() => { fitActive(); s.term.focus(); });
   setPvMode(s.pvMode, true);
   renderShells(s);
+  reviewChanged(s);
   renderStatus();
 }
 
@@ -454,6 +456,7 @@ function setPvMode(mode, force = false) {
   if (mode === 'file' && active.pvFile) renderFile(active);
   if (mode === 'app') renderApp(active);
   if (mode === 'feed') renderFeed(active);
+  if (mode === 'review') renderReview(active);
 }
 for (const b of document.querySelectorAll('#pv-modes button'))
   b.onclick = () => setPvMode(b.dataset.mode);
@@ -477,6 +480,7 @@ function showFile(s, path) {
   if (s.changed.has(np) && !s.seen.has(np)) {
     s.seen.add(np);
     s.tree.recomputeMarks();
+    reviewChanged(s);
   }
   if (s === active) { setPvMode('file', true); }
 }
@@ -801,7 +805,84 @@ listen('cockpit-tool', (ev) => {
   s.seen.delete(norm(p)); // a re-edit makes it unread again
   s.tree.recomputeMarks();
   addFeed(s, 'file', p);
+  // Attach to the current task. Edits before any prompt (auto-run, resumed
+  // work) get an implicit bucket rather than being lost.
+  let task = s.tasks[0];
+  if (!task) {
+    task = { prompt: '(work before first prompt)', at: Date.now(), files: new Map(), reviewed: false };
+    s.tasks.unshift(task);
+  }
+  task.files.set(norm(p), p);
+  task.reviewed = false;
+  reviewChanged(s);
 });
+
+listen('cockpit-prompt', (ev) => {
+  let j; try { j = JSON.parse(ev.payload.raw); } catch { return; }
+  const s = sessionForHook(j);
+  if (!s || !j.prompt) return;
+  s.tasks.unshift({ prompt: String(j.prompt).slice(0, 300), at: Date.now(), files: new Map(), reviewed: false });
+  if (s.tasks.length > 100) s.tasks.pop();
+  reviewChanged(s);
+});
+
+/* ---------- review queue ---------- */
+
+const taskUnseen = (s, t) => [...t.files.keys()].filter((f) => s.changed.has(f) && !s.seen.has(f)).length;
+
+function reviewChanged(s) {
+  if (s !== active) return;
+  const total = s.tasks.reduce((n, t) => n + taskUnseen(s, t), 0);
+  $('rv-count').textContent = total ? String(total) : '';
+  if (s.pvMode === 'review') renderReview(s);
+}
+
+function renderReview(s) {
+  const list = document.querySelector('#pv-review .list');
+  const tasks = s.tasks.filter((t) => t.files.size);
+  if (!tasks.length) {
+    list.innerHTML = `<div class="feed-empty">No edits to review yet. Each prompt you send becomes a task here, with the files Claude changed under it.</div>`;
+    return;
+  }
+  list.innerHTML = '';
+  for (const t of tasks) {
+    const unseen = taskUnseen(s, t);
+    const el = document.createElement('div');
+    el.className = 'task' + (unseen === 0 ? ' done' : '');
+    const time = new Date(t.at).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' });
+    el.innerHTML = `<div class="thead"><span class="tprompt">${esc(t.prompt)}</span>` +
+      (unseen ? `<span class="tbadge">${unseen}</span>` : `<span class="tok">✓</span>`) +
+      `<span class="tt">${time}</span></div><div class="tfiles" style="display:none"></div>`;
+    const filesEl = el.querySelector('.tfiles');
+    el.querySelector('.thead').onclick = () => {
+      const open = filesEl.style.display !== 'none';
+      filesEl.style.display = open ? 'none' : '';
+      if (!open && !filesEl.childElementCount) {
+        for (const [np, orig] of t.files) {
+          const row = document.createElement('div');
+          row.className = 'tfile ' + (s.changed.has(np) && !s.seen.has(np) ? 'unseen' : 'seen');
+          row.innerHTML = `<span class="dot"></span><span>${esc(feedLabel({ kind: 'file', value: orig }))}</span>`;
+          row.onclick = () => showFile(s, orig);
+          filesEl.appendChild(row);
+        }
+        if (unseen) {
+          const mark = document.createElement('button');
+          mark.className = 'tmark';
+          mark.textContent = 'Mark all reviewed';
+          mark.onclick = () => {
+            for (const np of t.files.keys()) if (s.changed.has(np)) s.seen.add(np);
+            t.reviewed = true;
+            s.tree.recomputeMarks();
+            renderReview(s);
+            reviewChanged(s);
+          };
+          filesEl.appendChild(mark);
+        }
+      }
+    };
+    list.appendChild(el);
+  }
+}
 
 // ------------------------------------------------------------------ status bar
 

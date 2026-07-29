@@ -79,6 +79,11 @@ pub fn start(app: AppHandle) -> Result<Gateway, String> {
                     let _ = app.emit("cockpit-tool", HookEvent { raw: body });
                     let _ = req.respond(resp(200, ""));
                 }
+                "/prompt" => {
+                    gwlog(&format!("prompt {}B", body.len()));
+                    let _ = app.emit("cockpit-prompt", HookEvent { raw: body });
+                    let _ = req.respond(resp(200, ""));
+                }
                 // Preview bridge: the injected picker/annotator scripts report
                 // here (they cannot use Tauri IPC from a remote origin).
                 "/select" => {
@@ -138,7 +143,10 @@ fn hook_cmd(port: u16, token: &str, route: &str) -> String {
 
 fn is_ours(cmd: &str) -> bool {
     cmd.contains("cockpit-hooks") // legacy .cmd shims
-        || (cmd.contains("127.0.0.1") && (cmd.contains("/status?token=") || cmd.contains("/tool?token=")))
+        || (cmd.contains("127.0.0.1")
+            && (cmd.contains("/status?token=")
+                || cmd.contains("/tool?token=")
+                || cmd.contains("/prompt?token=")))
 }
 
 /// Merge statusLine + PostToolUse into ~/.claude/settings.json. Rules: back up
@@ -161,6 +169,7 @@ fn install_user_settings(port: u16, token: &str) -> Result<(), String> {
 
     let status_cmd = hook_cmd(port, token, "status");
     let tool_cmd = hook_cmd(port, token, "tool");
+    let prompt_cmd = hook_cmd(port, token, "prompt");
     let mut changed = false;
 
     let cur_status = v
@@ -180,45 +189,52 @@ fn install_user_settings(port: u16, token: &str) -> Result<(), String> {
     if v.get("hooks").map(|h| !h.is_object()).unwrap_or(true) {
         v["hooks"] = serde_json::json!({});
     }
-    let arr = v["hooks"]
-        .as_object_mut()
-        .unwrap()
-        .entry("PostToolUse")
-        .or_insert_with(|| serde_json::json!([]));
-    if let Some(a) = arr.as_array_mut() {
-        let before = a.len();
-        a.retain(|e| {
-            !e.pointer("/hooks")
-                .and_then(|h| h.as_array())
-                .map(|hs| {
-                    hs.iter().any(|h| {
-                        h.pointer("/command")
-                            .and_then(|c| c.as_str())
-                            .map(|c| is_ours(c) && c != tool_cmd)
-                            .unwrap_or(false)
+    // One shape for every hook event we install: drop stale versions of ours,
+    // add the current command if missing, never touch entries we didn't write.
+    let mut ensure = |event: &str, matcher: Option<&str>, cmd: &str| {
+        let arr = v["hooks"]
+            .as_object_mut()
+            .unwrap()
+            .entry(event)
+            .or_insert_with(|| serde_json::json!([]));
+        if let Some(a) = arr.as_array_mut() {
+            let before = a.len();
+            a.retain(|e| {
+                !e.pointer("/hooks")
+                    .and_then(|h| h.as_array())
+                    .map(|hs| {
+                        hs.iter().any(|h| {
+                            h.pointer("/command")
+                                .and_then(|c| c.as_str())
+                                .map(|c| is_ours(c) && c != cmd)
+                                .unwrap_or(false)
+                        })
                     })
-                })
-                .unwrap_or(false)
-        });
-        changed |= a.len() != before;
-        let present = a.iter().any(|e| {
-            e.pointer("/hooks")
-                .and_then(|h| h.as_array())
-                .map(|hs| {
-                    hs.iter().any(|h| {
-                        h.pointer("/command").and_then(|c| c.as_str()) == Some(tool_cmd.as_str())
+                    .unwrap_or(false)
+            });
+            changed |= a.len() != before;
+            let present = a.iter().any(|e| {
+                e.pointer("/hooks")
+                    .and_then(|h| h.as_array())
+                    .map(|hs| {
+                        hs.iter().any(|h| {
+                            h.pointer("/command").and_then(|c| c.as_str()) == Some(cmd)
+                        })
                     })
-                })
-                .unwrap_or(false)
-        });
-        if !present {
-            a.push(serde_json::json!({
-                "matcher": "Edit|Write|MultiEdit|NotebookEdit",
-                "hooks": [{ "type": "command", "command": tool_cmd }]
-            }));
-            changed = true;
+                    .unwrap_or(false)
+            });
+            if !present {
+                let mut entry = serde_json::json!({ "hooks": [{ "type": "command", "command": cmd }] });
+                if let Some(m) = matcher {
+                    entry["matcher"] = serde_json::json!(m);
+                }
+                a.push(entry);
+                changed = true;
+            }
         }
-    }
+    };
+    ensure("PostToolUse", Some("Edit|Write|MultiEdit|NotebookEdit"), &tool_cmd);
+    ensure("UserPromptSubmit", None, &prompt_cmd);
 
     if changed {
         std::fs::write(&file, serde_json::to_string_pretty(&v).unwrap())
