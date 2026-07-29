@@ -60,6 +60,8 @@
   .node .label { overflow: hidden; text-overflow: ellipsis; }
   .node.changed > .row .label { color: var(--changed); }
   .node.changed > .row .label::after { content: " ●"; font-size: 8px; }
+  .node.seen > .row .label { color: #7fae7f; }
+  .node.seen > .row .label::after { content: " ●"; font-size: 8px; opacity: .55; }
   .kids { padding-left: 14px; }
 
   /* ---- terminal ---- */

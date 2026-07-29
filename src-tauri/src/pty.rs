@@ -217,6 +217,23 @@ pub fn pty_kill(state: tauri::State<'_, PtyState>, id: u32) -> Result<(), String
     Ok(())
 }
 
+/// The WebView can reload out from under us (user reflex F5, WebView2 crash
+/// recovery). The fresh frontend restores tabs by spawning new shells, so
+/// whatever is still in the session map at that moment is an orphan tree of
+/// pwsh/claude/node processes. Boot calls this before restoring.
+#[tauri::command]
+pub fn pty_kill_all(state: tauri::State<'_, PtyState>) {
+    let mut sessions = state.sessions.lock().unwrap();
+    for (_, mut s) in sessions.drain() {
+        if let Some(pid) = s.pid {
+            let _ = std::process::Command::new("taskkill")
+                .args(["/T", "/F", "/PID", &pid.to_string()])
+                .output();
+        }
+        let _ = s.child.kill();
+    }
+}
+
 /// Trace sink for the frontend and the gateway. MUST live outside any folder a
 /// session could be watching: writing a log line into a watched workspace makes
 /// the watcher fire, which traces, which writes, which fires, forever.

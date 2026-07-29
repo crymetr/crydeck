@@ -49,16 +49,22 @@ async function newSession(cwd) {
   box.className = 'termbox';
   $('termhost').appendChild(box);
   term.open(box);
-  try {
-    const webgl = new WebglAddon();
-    webgl.onContextLoss(() => webgl.dispose());
-    term.loadAddon(webgl);
-  } catch (e) { trace(`webgl off: ${e.message}`); }
+  // WebGL contexts get dropped on aggressive window resizes; losing one used
+  // to blank the terminal until the next repaint. Recreate after loss instead.
+  const attachWebgl = () => {
+    try {
+      const webgl = new WebglAddon();
+      webgl.onContextLoss(() => { webgl.dispose(); setTimeout(attachWebgl, 500); });
+      term.loadAddon(webgl);
+    } catch (e) { trace(`webgl off: ${e.message}`); }
+  };
+  attachWebgl();
 
   const s = {
     ptyId: null, cwd, term, fit, box,
     decoder: new TextDecoder('utf-8', { fatal: false }),
     changed: new Set(),      // norm paths Claude edited this session
+    seen: new Set(),         // subset of changed the user has opened since
     feed: [],                // { kind:'url'|'file', value, at }
     seenUrls: new Set(),
     status: null, statusAt: 0,
@@ -101,9 +107,12 @@ async function newSession(cwd) {
     return true;
   });
 
-  // A tab IS a Claude session: launch it once the shell has settled. The
-  // wrapper from init.ps1 rides --settings in, wiring hooks to this tab.
-  setTimeout(() => { if (sessions.has(s.ptyId)) invoke('pty_write', { id: s.ptyId, data: 'claude\r' }); }, 2500);
+  // A tab IS a Claude session: launch it once the shell has settled, with
+  // Remote Control on so the phone can pick any session up.
+  setTimeout(() => {
+    if (sessions.has(s.ptyId))
+      invoke('pty_write', { id: s.ptyId, data: `claude --remote-control "${basename(cwd)}"\r` });
+  }, 2500);
 
   s.tree = buildTree(s);
 
@@ -160,6 +169,8 @@ function activate(s) {
 function fitActive() {
   if (!active) return;
   active.fit.fit();
+  // Force a repaint: resizes occasionally leave the canvas blank otherwise.
+  active.term.refresh(0, Math.max(0, active.term.rows - 1));
   const { cols, rows } = active.term;
   if (cols < 2 || rows < 2) return;
   const key = `${cols}x${rows}`;
@@ -234,6 +245,30 @@ function buildTree(s) {
   const rootKids = document.createElement('div');
   el.appendChild(rootKids);
 
+  // Marks: amber = Claude changed it and you have not looked yet; green = you
+  // opened it since the change. Folders aggregate: amber wins over green.
+  function markFor(p, isDir) {
+    if (isDir) {
+      const np = norm(p) + '\\';
+      let unseen = false, seen = false;
+      for (const c of s.changed) {
+        if (!c.startsWith(np)) continue;
+        if (s.seen.has(c)) seen = true; else unseen = true;
+      }
+      return unseen ? 'changed' : seen ? 'seen' : null;
+    }
+    const np = norm(p);
+    if (!s.changed.has(np)) return null;
+    return s.seen.has(np) ? 'seen' : 'changed';
+  }
+  function applyMark(el, mark) {
+    el.classList.toggle('changed', mark === 'changed');
+    el.classList.toggle('seen', mark === 'seen');
+  }
+  function recomputeMarks() {
+    for (const rec of nodeByPath.values()) applyMark(rec.el, markFor(rec.p, rec.isDir));
+  }
+
   async function renderInto(container, dir) {
     let entries;
     try { entries = await invoke('fs_list', { dir }); }
@@ -243,19 +278,12 @@ function buildTree(s) {
       const p = dir.replace(/[\\/]+$/, '') + '\\' + en.name;
       const node = document.createElement('div');
       node.className = 'node';
-      if (en.is_dir) {
-        // A folder is "changed" if anything Claude edited lives under it, so
-        // the mark survives refreshes and shows through collapsed levels.
-        const np = norm(p) + '\\';
-        if ([...s.changed].some((c) => c.startsWith(np))) node.classList.add('changed');
-      } else if (s.changed.has(norm(p))) {
-        node.classList.add('changed');
-      }
+      applyMark(node, markFor(p, en.is_dir));
       const row = document.createElement('div');
       row.className = 'row';
       row.innerHTML = `<span class="arrow">${en.is_dir ? '▶' : ''}</span><span class="ico">${en.is_dir ? '📁' : '📄'}</span><span class="label">${esc(en.name)}</span>`;
       node.appendChild(row);
-      nodeByPath.set(norm(p), node);
+      nodeByPath.set(norm(p), { el: node, p, isDir: en.is_dir });
 
       if (en.is_dir) {
         let kids = null;
@@ -306,24 +334,7 @@ function buildTree(s) {
   }
   refresh();
 
-  return {
-    el,
-    markChanged(p) {
-      const n = nodeByPath.get(norm(p));
-      if (n) n.classList.add('changed');
-      // Ancestors get the mark too so a change deep in a collapsed folder is
-      // visible from the root.
-      let dir = p;
-      for (;;) {
-        const cut = dir.replace(/[\\/]+$/, '').lastIndexOf('\\');
-        if (cut <= 2) break;
-        dir = dir.slice(0, cut);
-        if (norm(dir) === norm(s.cwd)) break;
-        nodeByPath.get(norm(dir))?.classList.add('changed');
-      }
-    },
-    refresh,
-  };
+  return { el, recomputeMarks, refresh };
 }
 
 // Real-time tree: the Rust watcher coalesces filesystem churn per session and
@@ -355,6 +366,11 @@ for (const b of document.querySelectorAll('#pv-modes button'))
 
 function showFile(s, path) {
   s.pvFile = path;
+  const np = norm(path);
+  if (s.changed.has(np) && !s.seen.has(np)) {
+    s.seen.add(np);
+    s.tree.recomputeMarks();
+  }
   if (s === active) { setPvMode('file', true); }
 }
 
@@ -409,6 +425,7 @@ function loadApp(s, url) {
     // One live iframe per session, so switching tabs never reloads your app
     // state. That is the "own preview state" requirement, literally.
     s.iframe = document.createElement('iframe');
+    if (s !== active) s.iframe.style.display = 'none';
     $('pv-app').appendChild(s.iframe);
   }
   s.iframe.src = url;
@@ -472,6 +489,9 @@ function scanUrls(s, raw) {
     s.seenUrls.add(key);
     addFeed(s, 'url', u);
     trace(`url detected in session ${s.ptyId}: ${u}`);
+    // First dev server of the session claims the App pane automatically; later
+    // URLs only join the Feed so they never hijack what you are looking at.
+    if (!s.appUrl) loadApp(s, u);
   }
 }
 
@@ -515,7 +535,8 @@ listen('cockpit-tool', (ev) => {
   const p = j.tool_input?.file_path || j.tool_input?.notebook_path;
   if (!p) return;
   s.changed.add(norm(p));
-  s.tree.markChanged(p);
+  s.seen.delete(norm(p)); // a re-edit makes it unread again
+  s.tree.recomputeMarks();
   addFeed(s, 'file', p);
 });
 
@@ -610,9 +631,22 @@ for (const vn of ['--tree-w', '--preview-w']) {
   if (saved) document.documentElement.style.setProperty(vn, saved);
 }
 
+// The WebView2 default context menu and F5/Ctrl+R reload the page, which tears
+// down every terminal. Kill both paths, but leave the keys alone while focus
+// is inside a terminal (Ctrl+R is history search in pwsh and Claude).
+window.addEventListener('keydown', (e) => {
+  const inTerm = e.target.closest?.('.termbox');
+  if (inTerm) return;
+  if (e.key === 'F5' || (e.ctrlKey && e.code === 'KeyR')) e.preventDefault();
+}, true);
+document.addEventListener('contextmenu', (e) => e.preventDefault());
+
 // ------------------------------------------------------------------ boot
 
 async function boot() {
+  // If the WebView reloaded anyway (crash recovery), the old shells are
+  // orphans; reap them before spawning the restored set.
+  await invoke('pty_kill_all').catch(() => {});
   gw = await invoke('gateway_info');
   trace(`gateway on :${gw.port}`);
 
