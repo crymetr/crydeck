@@ -8,6 +8,8 @@ Not an IDE. No editor, no LSP, no debugger, no extension host. Claude does the
 writing; CryDeck is where you watch, steer, and try the result. That omission
 is the entire reason it stays light (~250MB working set, single small binary).
 
+![CryDeck: Claude editing a project on the left, the resulting app running live in the preview pane](docs/screenshot.png)
+
 ```
 ┌─ tabs: one Claude Code session per tab, each its own folder ────────┐
 ├──────────────┬──────────────────────────────┬──────────────────────┤
