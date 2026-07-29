@@ -350,6 +350,15 @@ pub fn log_path() -> std::path::PathBuf {
 #[tauri::command]
 pub fn bench_report(line: String) -> Result<(), String> {
     let path = log_path();
+    // Self-rotating: a runaway trace source once grew this to 40k lines in an
+    // afternoon. Keep the tail, cap the size.
+    if std::fs::metadata(&path).map(|m| m.len() > 2_000_000).unwrap_or(false) {
+        if let Ok(s) = std::fs::read_to_string(&path) {
+            let tail: String = s.lines().rev().take(500).collect::<Vec<_>>().into_iter().rev()
+                .collect::<Vec<_>>().join("\n");
+            let _ = std::fs::write(&path, format!("[log rotated]\n{tail}\n"));
+        }
+    }
     let mut f = std::fs::OpenOptions::new()
         .create(true)
         .append(true)

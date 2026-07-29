@@ -372,7 +372,6 @@ function buildTree(s) {
 listen('cockpit-fs', (ev) => {
   const s = sessions.get(ev.payload.tab);
   if (!s) return;
-  trace(`fs change in session ${s.ptyId}`);
   if (s === active) s.tree.refresh();
   else s.treeDirty = true;
 });
