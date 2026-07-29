@@ -247,7 +247,7 @@ fn write_init_script(dir: &Path) -> Result<(), String> {
 try { Set-PSReadLineOption -PredictionSource HistoryAndPlugin -ErrorAction Stop }
 catch { try { Set-PSReadLineOption -PredictionSource History -ErrorAction Stop } catch {} }
 try { Set-PSReadLineOption -PredictionViewStyle InlineView } catch {}
-Write-Host "cockpit session | hooks active" -ForegroundColor DarkCyan
+Write-Host "crydeck session | hooks active" -ForegroundColor DarkCyan
 "#;
     std::fs::write(dir.join("init.ps1"), init).map_err(|e| e.to_string())
 }

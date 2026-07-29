@@ -1,8 +1,8 @@
 {
   "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
-  "productName": "cockpit",
-  "version": "0.1.0",
-  "identifier": "tr.cryme.cockpit",
+  "productName": "CryDeck",
+  "version": "0.3.0",
+  "identifier": "tr.cryme.crydeck",
   "build": {
     "frontendDist": "../dist",
     "devUrl": "http://localhost:5173",
@@ -12,7 +12,7 @@
   "app": {
     "windows": [
       {
-        "title": "Cockpit",
+        "title": "CryDeck",
         "width": 800,
         "height": 600,
         "resizable": true,

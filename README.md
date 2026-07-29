@@ -1,51 +1,94 @@
-# Cockpit
+# CryDeck
 
-A minimal desktop shell around the Claude Code CLI.
+A lightweight Windows desktop shell for [Claude Code](https://claude.com/claude-code).
+Tabs of Claude sessions, a live file tree, and a preview pane where you can
+actually use what Claude builds.
 
-Not an IDE. No language server, no autocomplete, no debugger, no extension host.
-That omission is the entire reason it can stay light.
+Not an IDE. No editor, no LSP, no debugger, no extension host. Claude does the
+writing; CryDeck is where you watch, steer, and try the result. That omission
+is the entire reason it stays light (~250MB working set, single small binary).
 
 ```
-┌─ tabs: one per session, each own cwd ───────────────────────────────┐
+┌─ tabs: one Claude Code session per tab, each its own folder ────────┐
 ├──────────────┬──────────────────────────────┬──────────────────────┤
-│ file tree    │ terminal (Claude Code TUI)   │ preview (read-only)  │
-│ lazy, git    │ real PTY via ConPTY          │ selected file        │
-│ dirty marks  │                              │                      │
+│ file tree    │ terminal (Claude Code TUI)   │ preview              │
+│ live, unread │ real PTY via ConPTY          │ File | App | Feed    │
+│ marks        │ pwsh 7 + predictions         │ live localhost apps  │
 ├──────────────┴──────────────────────────────┴──────────────────────┤
-│ status: context % | 5h + weekly limits | model | effort | cost      │
+│ status: model | effort | context % | 5h/weekly limits | cost       │
 └─────────────────────────────────────────────────────────────────────┘
 ```
 
-- single click a file, it previews on the right
-- double click a file, it opens in the OS default app (docx to Word, xlsx to Excel)
-- double click a folder, a new Explorer window opens there
+## What it does
 
-Stack: Tauri 2 (Rust core + system WebView2), xterm.js, portable-pty.
+- **Tabs are sessions.** One working directory + one Claude Code process per
+  tab (cap 6), restored on relaunch. Sessions launch with Remote Control on,
+  so your phone can pick any of them up.
+- **The tree is live and knows what Claude touched.** Files Claude edits glow
+  amber; open one and it turns green (seen); a re-edit flips it back. Powered
+  by Claude Code's own hook events, not filesystem guessing. The watcher
+  tracks only the root + expanded folders, so a tab on a huge parent dir is
+  cheap, and a project folder Claude scaffolds appears the moment it lands.
+- **Preview pane, three modes.** *File*: read-only viewer (code, rendered
+  markdown, images). *App*: a real embedded webview; the first dev server the
+  session starts loads automatically and stays alive across tab switches.
+  *Feed*: everything Claude produced, newest first, one tap to open.
+- **OS integration.** Double-click opens files in their default app (docx to
+  Word, xlsx to Excel) and folders in Explorer. Right-click a folder to spin
+  it up as a new session.
+- **Status bar** from Claude Code's statusLine hook: model, effort, context %,
+  5h/weekly rate limits, session cost. The Claude TUI status line inside the
+  terminal shows a compact version of the same.
 
-See `PLAN.md` for the phase breakdown and the engineering rules that came out of
-the architecture review.
+## How the hook wiring works (please read before installing)
 
-## Status
+On first launch CryDeck merges two entries into `~/.claude/settings.json`:
+a `statusLine` command and a `PostToolUse` hook. Both are a single direct
+`curl.exe` call to a loopback-only gateway (fixed port range 48620-48639,
+per-install token). Your original settings file is backed up once as
+`settings.json.pre-cockpit`; an existing statusLine you wrote yourself is
+never replaced; entries are never duplicated. Outside CryDeck the hooks fail
+in milliseconds (connection refused) and Claude carries on unaffected.
 
-v0.2.0, full e2e build on the Design v2 architecture (see PLAN.md):
+Why not `--settings`? Claude Code on Windows executes hook commands through
+git-bash and does not trust hooks from flag-supplied settings files. The
+shell-agnostic single-line curl form is the only shape that survives cmd,
+bash and PowerShell alike. The scars are documented in PLAN.md.
 
-- Tabs, one Claude session per tab, own cwd, cap 6, restored on relaunch
-- Lazy file tree, changed-file highlighting fed by Claude Code PostToolUse hooks
-- Preview pane with File / App / Feed modes; App is a live iframe per session,
-  Feed collects files Claude edits and localhost URLs it mentions
-- Status bar from the statusLine hook: model, effort, context %, limits, cost
-- Sessions run pwsh 7 with PSReadLine predictions; `claude` is wrapped so the
-  hook settings ride along via --settings, user settings.json never touched
-- `app.exe <folder>` opens a session at that folder
+## Requirements
 
-Not yet done: Job Objects on tab close (taskkill /T fallback in place), git
-dirty decoration, ConPTY EOF reader-thread reclaim, human feel test.
+- Windows 11 (WebView2, ConPTY)
+- [Claude Code](https://claude.com/claude-code) CLI on PATH
+- PowerShell 7 (`pwsh`) recommended for inline prediction ghost text;
+  falls back to Windows PowerShell
+- To build: Rust (MSVC toolchain) + pnpm
 
-Phase 0 spike is archived in `src/spike.js`.
-
-## Dev
+## Build and run
 
 ```powershell
 pnpm install
-pnpm tauri dev
+pnpm tauri build --no-bundle
+# binary lands in src-tauri/target/release/
 ```
+
+Run it bare, or pass a folder to open a session there:
+
+```powershell
+crydeck.exe C:\dev\myproject
+```
+
+Dev mode: `pnpm tauri dev`. Always build releases through the Tauri CLI — a
+raw `cargo build` produces a binary that points at a dev server that is not
+running (PLAN.md, Phase 0 defect 4).
+
+## Known limitations
+
+- Windows-only by design (ConPTY, cmd/Explorer integration).
+- Tab close kills the process tree via `taskkill /T`; Job Objects are planned.
+- A session's shell is pwsh; Claude launches automatically in each new tab.
+- Frame-blocking headers (rare on dev servers) will keep a site out of the
+  App pane; use the open-in-browser button instead.
+
+## License
+
+MIT

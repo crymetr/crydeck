@@ -239,9 +239,9 @@ pub fn pty_kill_all(state: tauri::State<'_, PtyState>) {
 /// the watcher fire, which traces, which writes, which fires, forever.
 pub fn log_path() -> std::path::PathBuf {
     let base = std::env::var("LOCALAPPDATA").unwrap_or_else(|_| ".".into());
-    let dir = std::path::Path::new(&base).join("tr.cryme.cockpit");
+    let dir = std::path::Path::new(&base).join("tr.cryme.crydeck");
     let _ = std::fs::create_dir_all(&dir);
-    dir.join("cockpit.log")
+    dir.join("crydeck.log")
 }
 
 #[tauri::command]
