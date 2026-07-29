@@ -58,8 +58,9 @@ is the entire reason it stays light (~250MB working set, single small binary).
 
 ## How the hook wiring works (please read before installing)
 
-On first launch CryDeck merges two entries into `~/.claude/settings.json`:
-a `statusLine` command and a `PostToolUse` hook. Both are a single direct
+On first launch CryDeck merges three entries into `~/.claude/settings.json`:
+a `statusLine` command, a `PostToolUse` hook, and a `UserPromptSubmit` hook
+(the review queue's task boundaries). Each is a single direct
 `curl.exe` call to a loopback-only gateway (fixed port range 48620-48639,
 per-install token). Your original settings file is backed up once as
 `settings.json.pre-cockpit`; an existing statusLine you wrote yourself is
@@ -100,7 +101,7 @@ running (PLAN.md, Phase 0 defect 4).
 ## Known limitations
 
 - Windows-only by design (ConPTY, cmd/Explorer integration).
-- Tab close kills the process tree via `taskkill /T`; Job Objects are planned.
+- Closing a tab kills its whole process tree via a kill-on-close Job Object.
 - A session's shell is pwsh; Claude launches automatically in each new tab.
 - Frame-blocking headers (rare on dev servers) will keep a site out of the
   App pane; use the open-in-browser button instead.
