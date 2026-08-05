@@ -29,6 +29,31 @@ let active = null;             // session or null
 
 // ------------------------------------------------------------------ sessions
 
+// Ctrl+V / Ctrl+Shift+V paste, Ctrl+C / Ctrl+Shift+C copy when a selection
+// exists (plain Ctrl+C still reaches the shell as SIGINT otherwise), and
+// right-click pastes directly. term.paste() goes through xterm so bracketed
+// paste mode is honored.
+function wireClipboard(term, box) {
+  term.attachCustomKeyEventHandler((ev) => {
+    if (ev.type !== 'keydown' || !ev.ctrlKey) return true;
+    if (ev.code === 'KeyV') {
+      navigator.clipboard.readText().then((t) => t && term.paste(t));
+      return false;
+    }
+    if (ev.code === 'KeyC') {
+      const sel = term.getSelection();
+      if (sel) { navigator.clipboard.writeText(sel); return false; }
+      return true;
+    }
+    return true;
+  });
+  box.addEventListener('contextmenu', (ev) => {
+    ev.preventDefault();
+    ev.stopPropagation();
+    navigator.clipboard.readText().then((t) => t && term.paste(t));
+  });
+}
+
 async function newSession(cwd, opts = {}) {
   if (sessions.size >= MAX_SESSIONS) {
     alert(`Session cap is ${MAX_SESSIONS}. Close a tab first.`);
@@ -111,18 +136,7 @@ async function newSession(cwd, opts = {}) {
   sessions.set(s.ptyId, s);
 
   s.term.onData((d) => invoke('pty_write', { id: s.ptyId, data: d }));
-  s.term.attachCustomKeyEventHandler((ev) => {
-    if (ev.type === 'keydown' && ev.ctrlKey && ev.shiftKey && ev.code === 'KeyV') {
-      navigator.clipboard.readText().then((t) => t && invoke('pty_write', { id: s.ptyId, data: t }));
-      return false;
-    }
-    if (ev.type === 'keydown' && ev.ctrlKey && ev.shiftKey && ev.code === 'KeyC') {
-      const sel = s.term.getSelection();
-      if (sel) navigator.clipboard.writeText(sel);
-      return false;
-    }
-    return true;
-  });
+  wireClipboard(s.term, s.box);
 
   // A tab IS a Claude session: launch it once the shell has settled, with
   // Remote Control on so the phone can pick any session up. Restored tabs
@@ -963,6 +977,7 @@ async function spawnShell(s) {
   try { ptyId = await invoke('pty_spawn', opts('pwsh.exe')); }
   catch { ptyId = await invoke('pty_spawn', opts('powershell.exe')); }
   term.onData((d) => invoke('pty_write', { id: ptyId, data: d }));
+  wireClipboard(term, box);
 
   const sh = { ptyId, term, fit, box, lastSize: '' };
   s.shells.push(sh);

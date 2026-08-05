@@ -3,6 +3,11 @@
 All notable changes to CryDeck. Format loosely follows Keep a Changelog;
 versions are git tags.
 
+## v0.8.1 - 2026-08-05
+
+### Fixed
+- Paste with plain Ctrl+V (Ctrl+Shift+V still works) and copy with Ctrl+C when text is selected, in the main terminal and the extra shells under the preview. Right-clicking a terminal now pastes directly.
+
 ## v0.8.0 - 2026-07-29
 
 ### Added
