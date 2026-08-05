@@ -171,6 +171,21 @@ pub fn pty_spawn(
         builder.cwd(&cwd);
     }
 
+    // If CryDeck itself was launched from inside a Claude Code session (or any
+    // terminal), the shells would inherit markers like CLAUDE_CODE_CHILD_SESSION
+    // and TERM=dumb — nested-session warnings and a colorless terminal. Scrub
+    // them and assert our own terminal identity.
+    for (k, _) in std::env::vars() {
+        if k.starts_with("CLAUDE") {
+            builder.env_remove(&k);
+        }
+    }
+    for k in ["NO_COLOR", "CLICOLOR", "CLICOLOR_FORCE", "FORCE_COLOR"] {
+        builder.env_remove(k);
+    }
+    builder.env("TERM", "xterm-256color");
+    builder.env("COLORTERM", "truecolor");
+
     let id = state.next_id.fetch_add(1, Ordering::Relaxed);
 
     // Each tab carries its own identity. cwd is NOT an identity: two tabs are

@@ -3,6 +3,13 @@
 All notable changes to CryDeck. Format loosely follows Keep a Changelog;
 versions are git tags.
 
+## v0.8.2 - 2026-08-05
+
+### Fixed
+- Shells no longer inherit Claude Code session markers or TERM=dumb when CryDeck is launched from inside a Claude session: pty spawn scrubs CLAUDE* / color-suppressing env vars and sets TERM=xterm-256color + COLORTERM=truecolor. Fixes colorless terminal and "Transcript saving is off" warnings.
+- The X button works again: window.confirm() is a no-op in Tauri's webview, so the close confirmation silently vetoed every close. Replaced with an in-page dialog (session-cap alert too).
+- Resizing no longer strobes the terminal blank: lost WebGL contexts are recreated immediately with a forced repaint instead of after 500ms.
+
 ## v0.8.1 - 2026-08-05
 
 ### Fixed

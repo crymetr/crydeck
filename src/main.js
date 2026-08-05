@@ -56,7 +56,7 @@ function wireClipboard(term, box) {
 
 async function newSession(cwd, opts = {}) {
   if (sessions.size >= MAX_SESSIONS) {
-    alert(`Session cap is ${MAX_SESSIONS}. Close a tab first.`);
+    uiConfirm(`Session cap is ${MAX_SESSIONS}. Close a tab first.`, 'OK');
     return null;
   }
   const term = new Terminal({
@@ -76,11 +76,16 @@ async function newSession(cwd, opts = {}) {
   $('termhost').appendChild(box);
   term.open(box);
   // WebGL contexts get dropped on aggressive window resizes; losing one used
-  // to blank the terminal until the next repaint. Recreate after loss instead.
+  // to blank the terminal until the next repaint. Recreate immediately and
+  // force a repaint — the old 500ms delay made the whole screen strobe
+  // blank/back while dragging the window edge.
   const attachWebgl = () => {
     try {
       const webgl = new WebglAddon();
-      webgl.onContextLoss(() => { webgl.dispose(); setTimeout(attachWebgl, 500); });
+      webgl.onContextLoss(() => {
+        webgl.dispose();
+        setTimeout(() => { attachWebgl(); term.refresh(0, Math.max(0, term.rows - 1)); }, 50);
+      });
       term.loadAddon(webgl);
     } catch (e) { trace(`webgl off: ${e.message}`); }
   };
@@ -1114,9 +1119,38 @@ document.addEventListener('contextmenu', (e) => e.preventDefault());
 // Closing the window kills every session's process tree (that is the leak
 // protection doing its job) — so make it a decision, not an accident. The
 // conversations themselves survive on disk and restore via --continue.
-getCurrentWindow().onCloseRequested((ev) => {
-  if (sessions.size && !confirm(`Close CryDeck? ${sessions.size} session(s) will stop.\nConversations resume on next launch.`))
-    ev.preventDefault();
+// window.confirm() is a no-op in Tauri's webview (always falsy), which made
+// the X button dead whenever sessions were live — hence the in-page dialog.
+function uiConfirm(msg, okLabel = 'Close') {
+  return new Promise((resolve) => {
+    const wrap = document.createElement('div');
+    wrap.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.55);display:flex;align-items:center;justify-content:center;z-index:9999';
+    const card = document.createElement('div');
+    card.style.cssText = 'background:#17171c;border:1px solid #2a2a32;border-radius:8px;padding:18px 20px;max-width:380px;color:#d8d8de;font:13px system-ui;box-shadow:0 8px 30px rgba(0,0,0,.5)';
+    const p = document.createElement('div');
+    p.textContent = msg;
+    p.style.cssText = 'margin-bottom:14px;line-height:1.5;white-space:pre-line';
+    const row = document.createElement('div');
+    row.style.cssText = 'display:flex;gap:8px;justify-content:flex-end';
+    const mkBtn = (label, val, accent) => {
+      const b = document.createElement('button');
+      b.textContent = label;
+      b.style.cssText = `padding:6px 14px;border-radius:6px;border:1px solid ${accent ? '#c0392b' : '#3a3a44'};background:${accent ? '#8e2b20' : '#22222a'};color:#eee;cursor:pointer;font:12.5px system-ui`;
+      b.onclick = () => { wrap.remove(); resolve(val); };
+      return b;
+    };
+    row.append(mkBtn('Cancel', false, false), mkBtn(okLabel, true, true));
+    card.append(p, row);
+    wrap.append(card);
+    wrap.onclick = (e) => { if (e.target === wrap) { wrap.remove(); resolve(false); } };
+    document.body.append(wrap);
+  });
+}
+getCurrentWindow().onCloseRequested(async (ev) => {
+  if (!sessions.size) return;
+  ev.preventDefault();
+  if (await uiConfirm(`Close CryDeck? ${sessions.size} session(s) will stop.\nConversations resume on next launch.`))
+    getCurrentWindow().destroy();
 });
 
 async function boot() {
