@@ -128,10 +128,11 @@ running (PLAN.md, Phase 0 defect 4).
 ## Known limitations
 
 - Windows-only by design (ConPTY, cmd/Explorer integration).
-- Closing a tab kills its whole process tree via a kill-on-close Job Object.
-- A session's shell is pwsh; Claude launches automatically in each new tab.
-- Frame-blocking headers (rare on dev servers) will keep a site out of the
-  App pane; use the open-in-browser button instead.
+- Closing a tab kills its whole process tree via a kill-on-close Job Object —
+  that's the leak protection. The conversation itself survives: the tab
+  resumes it (`--continue`) on next launch.
+- A session's shell is pwsh (or Windows PowerShell); Claude launches
+  automatically in each new tab.
 
 ## License
 
