@@ -97,12 +97,17 @@ bash and PowerShell alike. The scars are documented in PLAN.md.
 ## Requirements
 
 - Windows 11 (WebView2, ConPTY)
-- [Claude Code](https://claude.com/claude-code) CLI on PATH
+- A [Claude](https://claude.ai) account (Pro or Max plan) for the login
+- [Claude Code](https://claude.com/claude-code) and Git — **installed for you
+  on first launch if missing** (official installer / winget, run visibly in a
+  terminal tab)
 - PowerShell 7 (`pwsh`) recommended for inline prediction ghost text;
   falls back to Windows PowerShell
-- To build: Rust (MSVC toolchain) + pnpm
 
-## Build and run
+## Build from source (developers)
+
+Users should just grab the [installer](https://github.com/saitaskar/crydeck/releases/latest);
+this is for hacking on CryDeck itself. Needs Rust (MSVC toolchain) + pnpm.
 
 ```powershell
 pnpm install
