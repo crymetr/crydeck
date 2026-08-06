@@ -1,7 +1,7 @@
 {
   "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
   "productName": "CryDeck",
-  "version": "0.8.3",
+  "version": "0.9.0",
   "identifier": "tr.cryme.crydeck",
   "build": {
     "frontendDist": "../dist",
@@ -23,9 +23,18 @@
       "csp": null
     }
   },
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEI2RjQ2MTk3NjE5OEY5RjEKUldUeCtaaGhsMkgwdGs4d00yWEVzSHVlT1VMMWRNM1I5Z0dTZjUvY2J1dFdKQlAxMEQzN29zdHAK",
+      "endpoints": [
+        "https://github.com/saitaskar/crydeck/releases/latest/download/latest.json"
+      ]
+    }
+  },
   "bundle": {
     "active": true,
-    "targets": "all",
+    "targets": ["nsis"],
+    "createUpdaterArtifacts": true,
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",

@@ -9,6 +9,8 @@ import { WebglAddon } from '@xterm/addon-webgl';
 import { invoke, Channel } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import { getCurrentWindow } from '@tauri-apps/api/window';
+import { check as checkUpdate } from '@tauri-apps/plugin-updater';
+import { relaunch } from '@tauri-apps/plugin-process';
 import { marked } from 'marked';
 import '@xterm/xterm/css/xterm.css';
 
@@ -1177,5 +1179,23 @@ async function boot() {
   }
   if (!sessions.size) renderEmpty();
   trace('boot complete');
+  setTimeout(maybeUpdate, 4000);
 }
 boot();
+
+// Auto-update: check GitHub Releases (latest.json) after boot, ask, install,
+// relaunch. Dev builds and offline starts fail the check silently — that's fine.
+async function maybeUpdate() {
+  let up;
+  try { up = await checkUpdate(); } catch (e) { trace(`update check: ${e}`); return; }
+  if (!up) return;
+  if (!(await uiConfirm(`CryDeck ${up.version} is available (you have ${up.currentVersion}).\nInstall and restart now?`, 'Update')))
+    return;
+  try {
+    await up.downloadAndInstall();
+    await relaunch();
+  } catch (e) {
+    trace(`update install: ${e}`);
+    uiConfirm(`Update failed: ${e}`, 'OK');
+  }
+}

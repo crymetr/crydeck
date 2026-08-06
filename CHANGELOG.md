@@ -3,6 +3,12 @@
 All notable changes to CryDeck. Format loosely follows Keep a Changelog;
 versions are git tags.
 
+## v0.9.0 - 2026-08-06
+
+### Added
+- Auto-update: CryDeck checks GitHub Releases on launch, asks before installing, and relaunches into the new version (tauri-plugin-updater, signed artifacts).
+- Distribution: CI now builds and publishes a signed NSIS installer (CryDeck_x64-setup.exe) plus updater manifest (latest.json) on every version tag.
+
 ## v0.8.3 - 2026-08-06
 
 ### Fixed
