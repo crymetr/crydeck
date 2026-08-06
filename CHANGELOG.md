@@ -3,6 +3,11 @@
 All notable changes to CryDeck. Format loosely follows Keep a Changelog;
 versions are git tags.
 
+## v0.9.2 - 2026-08-06
+
+### Fixed
+- Empty-state buttons ("Open a folder", "Start in my Projects folder") were unclickable: the positioned #termhost stacked above them and ate the clicks.
+
 ## v0.9.1 - 2026-08-06
 
 ### Added
