@@ -3,6 +3,11 @@
 All notable changes to CryDeck. Format loosely follows Keep a Changelog;
 versions are git tags.
 
+## v0.8.3 - 2026-08-06
+
+### Fixed
+- Close actually closes now: window.destroy() was silently denied because the capability set lacked core:window:allow-destroy. v0.8.2's dialog appeared but the Close button did nothing.
+
 ## v0.8.2 - 2026-08-05
 
 ### Fixed
