@@ -21,6 +21,28 @@ is the entire reason it stays light (~250MB working set, single small binary).
 └─────────────────────────────────────────────────────────────────────┘
 ```
 
+## Getting started (never used a terminal before? start here)
+
+1. **Download** `CryDeck_x64-setup.exe` from the
+   [latest release](https://github.com/saitaskar/crydeck/releases/latest) and
+   run it. Windows SmartScreen may warn about an unknown publisher — choose
+   "More info" → "Run anyway".
+2. **First launch.** CryDeck checks your machine. If Git or Claude Code are
+   missing it offers to install them — click **Install** and watch it happen
+   in a terminal tab (approve the Windows permission popup if one appears).
+   The tab flows straight into Claude Code's **login**: you need a Claude
+   account with a Pro or Max plan (https://claude.ai). Already have
+   everything installed? You'll never see any of this.
+3. **Make a projects folder.** Anywhere you like, e.g. `C:\Projects`, with one
+   subfolder per project (`C:\Projects\my-first-app`). A CryDeck tab = Claude
+   working inside one such folder.
+4. **Open a session.** Click **Open a folder**, pick your project folder, and
+   type what you want in plain words ("build me a page that tracks my
+   expenses"). Claude writes the files; the tree on the left shows what it
+   touched; the preview pane on the right runs the result.
+5. **Updates are automatic.** CryDeck checks for new versions on launch and
+   asks before installing.
+
 ## What it does
 
 - **Tabs are sessions.** One working directory + one Claude Code process per

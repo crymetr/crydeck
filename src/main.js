@@ -12,6 +12,8 @@ import { getCurrentWindow } from '@tauri-apps/api/window';
 import { check as checkUpdate } from '@tauri-apps/plugin-updater';
 import { relaunch } from '@tauri-apps/plugin-process';
 import { marked } from 'marked';
+import { getVersion } from '@tauri-apps/api/app';
+import changelogRaw from '../CHANGELOG.md?raw';
 import '@xterm/xterm/css/xterm.css';
 
 const MAX_SESSIONS = 6;
@@ -151,8 +153,23 @@ async function newSession(cwd, opts = {}) {
   // processes (by design), not the conversations.
   const resume = opts.resume ? '--continue ' : '';
   setTimeout(() => {
-    if (sessions.has(s.ptyId))
-      invoke('pty_write', { id: s.ptyId, data: `claude ${resume}--remote-control "${basename(cwd)}"\r` });
+    if (!sessions.has(s.ptyId)) return;
+    const launch = `claude ${resume}--remote-control "${basename(cwd)}"`;
+    if (opts.setup) {
+      // First run with missing prerequisites: install them right here in the
+      // tab, refresh PATH so this same shell sees the new binaries, then fall
+      // through into claude (its first launch walks the user through login).
+      const steps = [];
+      if (opts.setup.git)
+        steps.push(`winget install --id Git.Git -e --source winget --accept-package-agreements --accept-source-agreements`);
+      if (opts.setup.claude)
+        steps.push(`irm https://claude.ai/install.ps1 | iex`);
+      steps.push(`$env:Path = [Environment]::GetEnvironmentVariable('Path','Machine') + ';' + [Environment]::GetEnvironmentVariable('Path','User')`);
+      steps.push(launch);
+      invoke('pty_write', { id: s.ptyId, data: steps.join('; ') + '\r' });
+    } else {
+      invoke('pty_write', { id: s.ptyId, data: `${launch}\r` });
+    }
   }, 2500);
 
   s.tree = buildTree(s);
@@ -323,8 +340,23 @@ function renderEmpty() {
   if ($('empty')) return;
   const d = document.createElement('div');
   d.id = 'empty';
-  d.innerHTML = `<div>No sessions.</div><button>Open a folder</button>`;
+  d.innerHTML = `
+    <div>No sessions.</div>
+    <div style="display:flex;gap:8px;justify-content:center">
+      <button>Open a folder</button>
+      <button id="empty-proj">Start in my Projects folder</button>
+    </div>
+    <div style="margin-top:14px;max-width:420px;font-size:12px;line-height:1.6;color:#8a8a94;text-align:left">
+      New here? A session is Claude Code working inside one folder (a project).
+      "Start in my Projects folder" creates <b>Projects</b> in your user folder
+      and opens Claude there — just tell it what to build in plain words and ask
+      it to make a subfolder for the project. One tab per project.
+    </div>`;
   d.querySelector('button').onclick = pickAndOpen;
+  d.querySelector('#empty-proj').onclick = async () => {
+    const dir = await invoke('projects_dir').catch(() => null);
+    if (dir) try { await newSession(dir, {}); } catch (e) { trace(`projects open failed: ${e}`); }
+  };
   $('app').appendChild(d);
   renderStatus();
 }
@@ -1168,6 +1200,14 @@ async function boot() {
   nt.onclick = pickAndOpen;
   $('tabs').appendChild(nt);
 
+  const ab = document.createElement('button');
+  ab.id = 'about-btn';
+  ab.textContent = 'ⓘ';
+  ab.title = 'About CryDeck';
+  ab.style.cssText = 'margin-left:auto;background:none;border:none;color:#6a6a74;cursor:pointer;font-size:14px;padding:0 10px;align-self:center';
+  ab.onclick = showAbout;
+  $('tabs').appendChild(ab);
+
   let restored = [];
   try { restored = JSON.parse(localStorage.getItem('cockpit.tabs') || '[]'); } catch {}
   for (const cwd of restored.slice(0, MAX_SESSIONS)) {
@@ -1180,8 +1220,63 @@ async function boot() {
   if (!sessions.size) renderEmpty();
   trace('boot complete');
   setTimeout(maybeUpdate, 4000);
+
+  // First-run: if prerequisites are missing, offer to install them inside a
+  // regular session tab — the tab runs winget/installer, then flows straight
+  // into claude's own first-launch login. All installed → nothing to see here.
+  const env = await invoke('env_check').catch(() => null);
+  if (env && (!env.git || !env.claude)) {
+    const missing = [!env.git && 'Git', !env.claude && 'Claude Code'].filter(Boolean);
+    if (await uiConfirm(
+      `Welcome to CryDeck! One-time setup: ${missing.join(' and ')} ${missing.length > 1 ? 'are' : 'is'} not installed yet.\n\n` +
+      `Install now? It runs right here in a terminal tab and finishes by starting Claude, which asks you to log in ` +
+      `(you need a Claude account, Pro or Max plan). Approve the Windows permission popup if one appears.`,
+      'Install')) {
+      const dir = await invoke('projects_dir').catch(() => 'C:\\');
+      if (![...sessions.values()].some((s) => norm(s.cwd) === norm(dir)))
+        try { await newSession(dir, { setup: { git: !env.git, claude: !env.claude } }); } catch (e) { trace(`setup session failed: ${e}`); }
+    }
+  }
 }
 boot();
+
+// Minimal about card: version, links, changelog. Links open in the default
+// browser via os_open (cmd start) — no opener plugin needed.
+async function showAbout() {
+  const ver = await getVersion().catch(() => '?');
+  const wrap = document.createElement('div');
+  wrap.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.55);display:flex;align-items:center;justify-content:center;z-index:9999';
+  const link = (label, url) =>
+    `<a href="#" data-url="${url}" style="color:#7aa2ff;text-decoration:none">${label}</a>`;
+  const card = document.createElement('div');
+  card.style.cssText = 'background:#17171c;border:1px solid #2a2a32;border-radius:8px;padding:16px 20px;width:340px;color:#d8d8de;font:12.5px system-ui;box-shadow:0 8px 30px rgba(0,0,0,.5)';
+  card.innerHTML = `
+    <div style="display:flex;align-items:baseline;gap:8px;margin-bottom:10px">
+      <b style="font-size:14px">CryDeck</b><span style="color:#8a8a94">v${esc(ver)}</span>
+      <span style="flex:1"></span>
+      <button id="ab-log" style="background:#22222a;border:1px solid #3a3a44;border-radius:5px;color:#ccc;padding:3px 9px;cursor:pointer;font:11.5px system-ui">Changelog</button>
+    </div>
+    <div style="display:flex;gap:14px">
+      ${link('GitHub', 'https://github.com/saitaskar/crydeck')}
+      ${link('cryme.tr', 'https://cryme.tr')}
+      ${link('☕ Buy me a coffee', 'https://cryme.tr/support')}
+    </div>
+    <div id="ab-body" style="display:none;margin-top:12px;max-height:300px;overflow:auto;border-top:1px solid #2a2a32;padding-top:10px;font-size:12px;line-height:1.5"></div>`;
+  card.querySelectorAll('a[data-url]').forEach((a) => {
+    a.onclick = (e) => { e.preventDefault(); invoke('os_open', { path: a.dataset.url }); };
+  });
+  card.querySelector('#ab-log').onclick = () => {
+    const b = card.querySelector('#ab-body');
+    if (b.style.display === 'none') { b.innerHTML = marked.parse(changelogRaw); b.style.display = 'block'; }
+    else b.style.display = 'none';
+  };
+  wrap.onclick = (e) => { if (e.target === wrap) wrap.remove(); };
+  window.addEventListener('keydown', function onKey(e) {
+    if (e.key === 'Escape') { wrap.remove(); window.removeEventListener('keydown', onKey); }
+  });
+  wrap.append(card);
+  document.body.append(wrap);
+}
 
 // Auto-update: check GitHub Releases (latest.json) after boot, ask, install,
 // relaunch. Dev builds and offline starts fail the check silently — that's fine.

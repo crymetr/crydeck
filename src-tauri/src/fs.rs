@@ -213,6 +213,38 @@ pub fn git_diff(root: String, path: String) -> String {
     run(&["-C", &root, "diff", "--no-index", "--", "NUL", &path], true)
 }
 
+fn on_path(cmd: &str) -> bool {
+    quiet("where.exe")
+        .arg(cmd)
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false)
+}
+
+/// First-run bootstrap: sessions are useless without Claude Code, and Claude
+/// Code on Windows needs git (hooks run through Git Bash).
+#[derive(Serialize)]
+pub struct EnvCheck {
+    pub git: bool,
+    pub claude: bool,
+}
+
+#[tauri::command]
+pub fn env_check() -> EnvCheck {
+    EnvCheck { git: on_path("git"), claude: on_path("claude") }
+}
+
+/// Where a first-run setup session lands: a real projects folder, created if
+/// needed, so Claude works somewhere sane from day one instead of the profile
+/// root.
+#[tauri::command]
+pub fn projects_dir() -> String {
+    let home = std::env::var("USERPROFILE").unwrap_or_else(|_| "C:\\".into());
+    let p = PathBuf::from(&home).join("Projects");
+    let _ = std::fs::create_dir_all(&p);
+    p.to_string_lossy().into_owned()
+}
+
 /// Double-click a file: hand it to whatever the OS associates with it.
 /// `cmd /c start` resolves associations; the empty "" is start's window title
 /// slot, without it a quoted path is eaten as the title.

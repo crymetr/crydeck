@@ -3,6 +3,13 @@
 All notable changes to CryDeck. Format loosely follows Keep a Changelog;
 versions are git tags.
 
+## v0.9.1 - 2026-08-06
+
+### Added
+- First-run setup: CryDeck checks for Git and Claude Code on launch and, with one click, installs whatever is missing inside a normal terminal tab (winget for Git, official installer for Claude Code), then flows straight into Claude's login. Fully installed machines skip all of it.
+- Beginner onboarding: the empty state explains sessions and offers "Start in my Projects folder" (auto-creates %USERPROFILE%\Projects); first-run setup lands there too. README gained a from-zero Getting Started section.
+- About card: tiny ⓘ on the tab bar — version, GitHub, cryme.tr, Buy me a coffee, and an inline changelog viewer.
+
 ## v0.9.0 - 2026-08-06
 
 ### Added
