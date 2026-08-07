@@ -1293,8 +1293,14 @@ async function boot() {
       `(you need a Claude account, Pro or Max plan). Approve the Windows permission popup if one appears.`,
       'Install')) {
       const dir = await invoke('projects_dir').catch(() => 'C:\\');
-      if (![...sessions.values()].some((s) => norm(s.cwd) === norm(dir)))
-        try { await newSession(dir, { setup: { git: !env.git, claude: !env.claude } }); } catch (e) { trace(`setup session failed: ${e}`); }
+      // Always open a dedicated setup tab. The old code skipped setup whenever
+      // a session already sat at the Projects folder — but a restored tab lands
+      // there on every launch, so clicking Install silently did nothing (the
+      // "kaldı öyle" bug). A second Projects tab is harmless, and a fresh setup
+      // tab is a clean shell that installs first instead of one already trying
+      // (and failing) to launch a not-yet-installed claude.
+      try { await newSession(dir, { setup: { git: !env.git, claude: !env.claude } }); }
+      catch (e) { trace(`setup session failed: ${e}`); }
     }
   }
 }

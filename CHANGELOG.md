@@ -7,6 +7,7 @@ versions are git tags.
 
 ### Fixed
 - First-run setup silently did nothing on machines without winget (common on stock/home Windows): the install steps were chained so a missing winget swallowed the rest. Setup is now self-correcting and talks the whole way through — Git falls back from winget to the direct git-for-windows installer (resolved via the GitHub API so it never 404s on a version bump), failures print a clear message, and every step announces what it is doing so a stuck one is visible. It also enables TLS 1.2 first, since the setup tab lands in Windows PowerShell 5.1 on a fresh machine and 5.1 otherwise fails the GitHub/installer fetches with an SSL error.
+- First-run setup silently did nothing when a tab was already open at the Projects folder — which happens on every launch, since CryDeck restores open tabs. Clicking Install now always opens a dedicated setup tab instead of skipping. This was the main "click Install, nothing happens" cause.
 - First-run setup is now loud instead of silent: on a slow connection a silent step looked frozen, so every step announces itself, the Git download shows a live progress bar, the installer runs visibly, and a final summary prints the installed git/claude versions or names exactly what is still missing. Claude only launches when it truly resolves.
 
 ## v0.9.2 - 2026-08-06
