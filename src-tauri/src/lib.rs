@@ -9,6 +9,9 @@ pub fn run() {
   tauri::Builder::default()
     .plugin(tauri_plugin_updater::Builder::new().build())
     .plugin(tauri_plugin_process::init())
+    // Start-with-Windows. The frontend enables this by default on first run and
+    // exposes a toggle; the plugin writes/removes the HKCU Run entry on Windows.
+    .plugin(tauri_plugin_autostart::Builder::new().build())
     .manage(pty::PtyState::default())
     .manage(watch::WatchState::default())
     .manage(preview::PreviewState::default())

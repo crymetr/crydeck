@@ -11,6 +11,7 @@ import { listen } from '@tauri-apps/api/event';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { check as checkUpdate } from '@tauri-apps/plugin-updater';
 import { relaunch } from '@tauri-apps/plugin-process';
+import { enable as autostartEnable, disable as autostartDisable, isEnabled as autostartIsEnabled } from '@tauri-apps/plugin-autostart';
 import { marked } from 'marked';
 import { getVersion } from '@tauri-apps/api/app';
 import changelogRaw from '../CHANGELOG.md?raw';
@@ -1351,6 +1352,15 @@ async function boot() {
       } catch (e) { trace(`setup session failed: ${e}`); }
     }
   }
+
+  // Start with Windows, on by default. Only force it once (first ever launch),
+  // so a user who later turns it off in the About card stays off across
+  // restarts instead of having it re-enabled every boot.
+  if (!localStorage.getItem('cockpit.autostart.init')) {
+    try { await autostartEnable(); trace('autostart enabled (default)'); }
+    catch (e) { trace(`autostart enable failed: ${e}`); }
+    localStorage.setItem('cockpit.autostart.init', '1');
+  }
 }
 boot();
 
@@ -1375,10 +1385,20 @@ async function showAbout() {
       ${link('cryme.tr', 'https://cryme.tr')}
       ${link('☕ Buy me a coffee', 'https://cryme.tr/support')}
     </div>
+    <label id="ab-autostart-row" style="display:flex;align-items:center;gap:8px;margin-top:12px;cursor:pointer">
+      <input type="checkbox" id="ab-autostart" style="cursor:pointer">
+      <span>Start CryDeck when Windows starts</span>
+    </label>
     <div id="ab-body" style="display:none;margin-top:12px;max-height:300px;overflow:auto;border-top:1px solid #2a2a32;padding-top:10px;font-size:12px;line-height:1.5"></div>`;
   card.querySelectorAll('a[data-url]').forEach((a) => {
     a.onclick = (e) => { e.preventDefault(); invoke('os_open', { path: a.dataset.url }); };
   });
+  const asBox = card.querySelector('#ab-autostart');
+  autostartIsEnabled().then((on) => { asBox.checked = !!on; }).catch(() => {});
+  asBox.onchange = async () => {
+    try { asBox.checked ? await autostartEnable() : await autostartDisable(); }
+    catch (e) { trace(`autostart toggle failed: ${e}`); asBox.checked = !asBox.checked; }
+  };
   card.querySelector('#ab-log').onclick = () => {
     const b = card.querySelector('#ab-body');
     if (b.style.display === 'none') { b.innerHTML = marked.parse(changelogRaw); b.style.display = 'block'; }

@@ -3,6 +3,11 @@
 All notable changes to CryDeck. Format loosely follows Keep a Changelog;
 versions are git tags.
 
+## v0.9.7 - 2026-08-07
+
+### Added
+- Start with Windows, on by default. CryDeck registers itself to launch at login on first run; a "Start CryDeck when Windows starts" checkbox in the About card (ⓘ) turns it off or back on, and that choice sticks across restarts.
+
 ## v0.9.6 - 2026-08-07
 
 ### Fixed
