@@ -58,6 +58,47 @@ function wireClipboard(term, box) {
   });
 }
 
+// First-run prerequisite installer, emitted as a single PowerShell line typed
+// into the setup tab. Built for a stock, fresh machine and someone who has
+// never done this: self-correcting (each tool is guarded by Get-Command so
+// re-running is harmless), git falls back from winget to the direct installer
+// when winget is absent (common on clean/home Windows), failures print a clear
+// message, and every step announces itself so a stuck one is never silent.
+function setupScript(launch) {
+  const gitInstall =
+    `if(-not(Get-Command git -EA SilentlyContinue)){` +
+      `if(Get-Command winget -EA SilentlyContinue){` +
+        `Write-Host '[CryDeck] Installing Git via winget...' -f Cyan;` +
+        `winget install --id Git.Git -e --accept-package-agreements --accept-source-agreements` +
+      `}else{` +
+        `Write-Host '[CryDeck] winget not found; downloading Git installer...' -f Yellow;` +
+        `try{` +
+          `$o="$env:TEMP\\git-setup.exe";` +
+          `$r=irm https://api.github.com/repos/git-for-windows/git/releases/latest;` +
+          `$u=($r.assets|?{$_.name -match '64-bit\\.exe$'}|select -f 1).browser_download_url;` +
+          `iwr $u -OutFile $o -UseBasicParsing;` +
+          `Write-Host '[CryDeck] Running Git installer (silent)...' -f Cyan;` +
+          `Start-Process $o -ArgumentList '/VERYSILENT','/NORESTART' -Wait` +
+        `}catch{Write-Host \"[CryDeck] Git download failed: $_\" -f Red}` +
+      `}` +
+    `}else{Write-Host '[CryDeck] Git already present.' -f DarkGray}`;
+  const claudeInstall =
+    `if(-not(Get-Command claude -EA SilentlyContinue)){` +
+      `Write-Host '[CryDeck] Installing Claude Code...' -f Cyan;` +
+      `try{irm https://claude.ai/install.ps1 | iex}` +
+      `catch{Write-Host \"[CryDeck] Claude Code install failed: $_\" -f Red}` +
+    `}else{Write-Host '[CryDeck] Claude Code already present.' -f DarkGray}`;
+  const refresh =
+    `$env:Path=[Environment]::GetEnvironmentVariable('Path','Machine')+';'+[Environment]::GetEnvironmentVariable('Path','User')`;
+  // After the refresh, claude may live in a per-user dir that a fresh Machine
+  // PATH read does not include yet; only launch if it actually resolves, else
+  // tell the user plainly rather than firing a command that does nothing.
+  const finish =
+    `if(Get-Command claude -EA SilentlyContinue){${launch}}` +
+    `else{Write-Host '[CryDeck] Setup did not finish. Close and reopen CryDeck after checking the messages above.' -f Red}`;
+  return `$ErrorActionPreference='Continue'; ${gitInstall}; ${claudeInstall}; ${refresh}; ${finish}`;
+}
+
 async function newSession(cwd, opts = {}) {
   if (sessions.size >= MAX_SESSIONS) {
     uiConfirm(`Session cap is ${MAX_SESSIONS}. Close a tab first.`, 'OK');
@@ -159,14 +200,12 @@ async function newSession(cwd, opts = {}) {
       // First run with missing prerequisites: install them right here in the
       // tab, refresh PATH so this same shell sees the new binaries, then fall
       // through into claude (its first launch walks the user through login).
-      const steps = [];
-      if (opts.setup.git)
-        steps.push(`winget install --id Git.Git -e --source winget --accept-package-agreements --accept-source-agreements`);
-      if (opts.setup.claude)
-        steps.push(`irm https://claude.ai/install.ps1 | iex`);
-      steps.push(`$env:Path = [Environment]::GetEnvironmentVariable('Path','Machine') + ';' + [Environment]::GetEnvironmentVariable('Path','User')`);
-      steps.push(launch);
-      invoke('pty_write', { id: s.ptyId, data: steps.join('; ') + '\r' });
+      // Runtime Get-Command guards make this self-correcting and idempotent:
+      // winget is missing on plenty of stock/home Windows installs, so git
+      // falls back to the direct git-for-windows installer (asset resolved via
+      // the GitHub API so it never 404s on a version bump). Every branch
+      // prints what it is doing so a stuck step is visible instead of silent.
+      invoke('pty_write', { id: s.ptyId, data: setupScript(launch) + '\r' });
     } else {
       invoke('pty_write', { id: s.ptyId, data: `${launch}\r` });
     }
