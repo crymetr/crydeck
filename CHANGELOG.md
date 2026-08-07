@@ -3,6 +3,12 @@
 All notable changes to CryDeck. Format loosely follows Keep a Changelog;
 versions are git tags.
 
+## v0.9.4 - 2026-08-07
+
+### Fixed
+- Auto-update could not deliver the 0.9.3 setup fixes: they were re-released under the same 0.9.3 version, so the updater saw "already 0.9.3" and never pulled them. Shipped as 0.9.4 so the update actually reaches installed copies.
+- Added trace lines around the first-run flow (env check result, Install accept/decline, setup session start, script typed) so a stuck setup is diagnosable from the log instead of invisible.
+
 ## v0.9.3 - 2026-08-07
 
 ### Fixed
