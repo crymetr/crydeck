@@ -226,6 +226,7 @@ async function newSession(cwd, opts = {}) {
       // falls back to the direct git-for-windows installer (asset resolved via
       // the GitHub API so it never 404s on a version bump). Every branch
       // prints what it is doing so a stuck step is visible instead of silent.
+      trace(`setup script typed into session ${s.ptyId}`);
       invoke('pty_write', { id: s.ptyId, data: setupScript(launch) + '\r' });
     } else {
       invoke('pty_write', { id: s.ptyId, data: `${launch}\r` });
@@ -1285,13 +1286,16 @@ async function boot() {
   // regular session tab — the tab runs winget/installer, then flows straight
   // into claude's own first-launch login. All installed → nothing to see here.
   const env = await invoke('env_check').catch(() => null);
+  trace(`env_check: git=${env ? env.git : '?'} claude=${env ? env.claude : '?'}`);
   if (env && (!env.git || !env.claude)) {
     const missing = [!env.git && 'Git', !env.claude && 'Claude Code'].filter(Boolean);
-    if (await uiConfirm(
+    const ok = await uiConfirm(
       `Welcome to CryDeck! One-time setup: ${missing.join(' and ')} ${missing.length > 1 ? 'are' : 'is'} not installed yet.\n\n` +
       `Install now? It runs right here in a terminal tab and finishes by starting Claude, which asks you to log in ` +
       `(you need a Claude account, Pro or Max plan). Approve the Windows permission popup if one appears.`,
-      'Install')) {
+      'Install');
+    trace(`setup prompt: ${ok ? 'accepted' : 'declined'}`);
+    if (ok) {
       const dir = await invoke('projects_dir').catch(() => 'C:\\');
       // Always open a dedicated setup tab. The old code skipped setup whenever
       // a session already sat at the Projects folder — but a restored tab lands
@@ -1299,8 +1303,10 @@ async function boot() {
       // "kaldı öyle" bug). A second Projects tab is harmless, and a fresh setup
       // tab is a clean shell that installs first instead of one already trying
       // (and failing) to launch a not-yet-installed claude.
-      try { await newSession(dir, { setup: { git: !env.git, claude: !env.claude } }); }
-      catch (e) { trace(`setup session failed: ${e}`); }
+      try {
+        const ss = await newSession(dir, { setup: { git: !env.git, claude: !env.claude } });
+        trace(`setup session started: ${ss ? ss.ptyId : 'null'} at ${dir}`);
+      } catch (e) { trace(`setup session failed: ${e}`); }
     }
   }
 }
