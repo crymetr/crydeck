@@ -69,6 +69,29 @@ function wireClipboard(term, box) {
 // or names exactly what failed.
 function setupScript(launch) {
   const say = (msg, color) => `Write-Host '[CryDeck] ${msg}' -f ${color}`;
+  // PowerShell 7. Without it CryDeck falls back to Windows PowerShell 5.1, which
+  // renders a dead black terminal under ConPTY on some machines. Installing it
+  // makes a fresh box behave like a dev box (where pwsh is already present).
+  // winget first; otherwise the direct MSI from GitHub, installed silently.
+  const pwshInstall =
+    `if(-not(Get-Command pwsh -EA SilentlyContinue)){` +
+      `if(Get-Command winget -EA SilentlyContinue){` +
+        `${say('Installing PowerShell 7 via winget...', 'Cyan')};` +
+        `winget install --id Microsoft.PowerShell -e --accept-package-agreements --accept-source-agreements` +
+      `}else{` +
+        `${say('winget not found - downloading the PowerShell 7 installer directly.', 'Yellow')};` +
+        `try{` +
+          `$o="$env:TEMP\\pwsh-setup.msi";` +
+          `$r=irm https://api.github.com/repos/PowerShell/PowerShell/releases/latest;` +
+          `$u=($r.assets|?{$_.name -match 'win-x64\\.msi$'}|select -f 1).browser_download_url;` +
+          `${say('Downloading PowerShell 7... progress shows at the top.', 'Cyan')};` +
+          `iwr $u -OutFile $o;` +
+          `${say('Installing PowerShell 7 (silent)...', 'Cyan')};` +
+          `Start-Process msiexec.exe -ArgumentList '/i',(('\"'+$o+'\"')),'/qn','/norestart' -Wait;` +
+          `${say('PowerShell 7 installed.', 'Green')}` +
+        `}catch{${say('PowerShell 7 install failed: $_', 'Red')}}` +
+      `}` +
+    `}else{${say('PowerShell 7 already installed - skipping.', 'DarkGray')}}`;
   const gitInstall =
     `if(-not(Get-Command git -EA SilentlyContinue)){` +
       `if(Get-Command winget -EA SilentlyContinue){` +
@@ -115,8 +138,13 @@ function setupScript(launch) {
   // Final summary: print the actual git/claude versions, or a red line naming
   // what is still missing, so the user never has to guess whether it worked.
   // Only launch claude when it truly resolves — never fire a no-op command.
+  // pwsh is installed but the running CryDeck captured its PATH at launch and
+  // still spawns the 5.1 fallback — a restart is needed for the upgraded
+  // terminal to take effect, so say so explicitly when we just installed it.
   const finish =
     `${say('----- Setup summary -----', 'White')};` +
+    `if(Get-Command pwsh -EA SilentlyContinue){${say('PowerShell 7 OK. Restart CryDeck once so terminals use it (fixes the black screen).', 'Green')}}` +
+    `else{${say('PowerShell 7 is still MISSING - terminals may render black until it is installed.', 'Red')}};` +
     `if(Get-Command git -EA SilentlyContinue){${say('Git OK: ', 'Green')};git --version}` +
     `else{${say('Git is still MISSING.', 'Red')}};` +
     `if(Get-Command claude -EA SilentlyContinue){` +
@@ -131,7 +159,7 @@ function setupScript(launch) {
   // no-op on modern PowerShell.
   const tls = `[Net.ServicePointManager]::SecurityProtocol=[Net.SecurityProtocolType]::Tls12`;
   const banner = say('Starting one-time setup. Watch this tab - each step reports below.', 'Cyan');
-  return `$ErrorActionPreference='Continue'; ${banner}; ${tls}; ${gitInstall}; ${claudeInstall}; ${claudePath}; ${refresh}; ${finish}`;
+  return `$ErrorActionPreference='Continue'; ${banner}; ${tls}; ${pwshInstall}; ${gitInstall}; ${claudeInstall}; ${claudePath}; ${refresh}; ${finish}`;
 }
 
 async function newSession(cwd, opts = {}) {
@@ -1300,9 +1328,9 @@ async function boot() {
   // regular session tab — the tab runs winget/installer, then flows straight
   // into claude's own first-launch login. All installed → nothing to see here.
   const env = await invoke('env_check').catch(() => null);
-  trace(`env_check: git=${env ? env.git : '?'} claude=${env ? env.claude : '?'}`);
-  if (env && (!env.git || !env.claude)) {
-    const missing = [!env.git && 'Git', !env.claude && 'Claude Code'].filter(Boolean);
+  trace(`env_check: git=${env ? env.git : '?'} claude=${env ? env.claude : '?'} pwsh=${env ? env.pwsh : '?'}`);
+  if (env && (!env.git || !env.claude || !env.pwsh)) {
+    const missing = [!env.pwsh && 'PowerShell 7', !env.git && 'Git', !env.claude && 'Claude Code'].filter(Boolean);
     const ok = await uiConfirm(
       `Welcome to CryDeck! One-time setup: ${missing.join(' and ')} ${missing.length > 1 ? 'are' : 'is'} not installed yet.\n\n` +
       `Install now? It runs right here in a terminal tab and finishes by starting Claude, which asks you to log in ` +

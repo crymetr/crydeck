@@ -3,6 +3,11 @@
 All notable changes to CryDeck. Format loosely follows Keep a Changelog;
 versions are git tags.
 
+## v0.9.6 - 2026-08-07
+
+### Fixed
+- Black/dead terminal on machines without PowerShell 7: when pwsh is absent CryDeck fell back to Windows PowerShell 5.1, which renders an empty non-responsive terminal under ConPTY on some boxes (a dev machine with pwsh installed never hit it). First-run setup now installs PowerShell 7 too (winget, or the direct MSI from GitHub), env_check reports pwsh, and the Welcome prompt lists it among the prerequisites. Restart CryDeck once after install so new terminals use pwsh.
+
 ## v0.9.5 - 2026-08-07
 
 ### Fixed

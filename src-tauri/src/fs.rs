@@ -222,16 +222,20 @@ fn on_path(cmd: &str) -> bool {
 }
 
 /// First-run bootstrap: sessions are useless without Claude Code, and Claude
-/// Code on Windows needs git (hooks run through Git Bash).
+/// Code on Windows needs git (hooks run through Git Bash). PowerShell 7 (pwsh)
+/// matters too: when it is absent we fall back to Windows PowerShell 5.1, which
+/// on some machines renders a dead black terminal under ConPTY — so we treat a
+/// missing pwsh as a prerequisite to install, not just a silent fallback.
 #[derive(Serialize)]
 pub struct EnvCheck {
     pub git: bool,
     pub claude: bool,
+    pub pwsh: bool,
 }
 
 #[tauri::command]
 pub fn env_check() -> EnvCheck {
-    EnvCheck { git: on_path("git"), claude: on_path("claude") }
+    EnvCheck { git: on_path("git"), claude: on_path("claude"), pwsh: on_path("pwsh") }
 }
 
 /// Where a first-run setup session lands: a real projects folder, created if
