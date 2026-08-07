@@ -62,47 +62,62 @@ function wireClipboard(term, box) {
 // into the setup tab. Built for a stock, fresh machine and someone who has
 // never done this: self-correcting (each tool is guarded by Get-Command so
 // re-running is harmless), git falls back from winget to the direct installer
-// when winget is absent (common on clean/home Windows), failures print a clear
-// message, and every step announces itself so a stuck one is never silent.
+// when winget is absent (common on clean/home Windows), and — the point of the
+// whole thing — it is loud, not silent. On a slow connection a silent step
+// looks frozen, so every step announces itself, downloads show a live progress
+// bar, the Git installer runs visibly, and a final summary confirms both tools
+// or names exactly what failed.
 function setupScript(launch) {
+  const say = (msg, color) => `Write-Host '[CryDeck] ${msg}' -f ${color}`;
   const gitInstall =
     `if(-not(Get-Command git -EA SilentlyContinue)){` +
       `if(Get-Command winget -EA SilentlyContinue){` +
-        `Write-Host '[CryDeck] Installing Git via winget...' -f Cyan;` +
+        `${say('Installing Git via winget (its progress shows below)...', 'Cyan')};` +
         `winget install --id Git.Git -e --accept-package-agreements --accept-source-agreements` +
       `}else{` +
-        `Write-Host '[CryDeck] winget not found; downloading Git installer...' -f Yellow;` +
+        `${say('winget not found - downloading the Git installer directly.', 'Yellow')};` +
         `try{` +
           `$o="$env:TEMP\\git-setup.exe";` +
           `$r=irm https://api.github.com/repos/git-for-windows/git/releases/latest;` +
           `$u=($r.assets|?{$_.name -match '64-bit\\.exe$'}|select -f 1).browser_download_url;` +
-          `iwr $u -OutFile $o -UseBasicParsing;` +
-          `Write-Host '[CryDeck] Running Git installer (silent)...' -f Cyan;` +
-          `Start-Process $o -ArgumentList '/VERYSILENT','/NORESTART' -Wait` +
-        `}catch{Write-Host \"[CryDeck] Git download failed: $_\" -f Red}` +
+          `${say('Downloading Git... a progress bar shows at the top; slow connections can take a minute.', 'Cyan')};` +
+          // Leave the progress bar on (do NOT use -UseBasicParsing) so a slow
+          // download visibly ticks instead of looking frozen.
+          `iwr $u -OutFile $o;` +
+          `${say('Download done. Launching the Git installer - click through it if it opens a window.', 'Cyan')};` +
+          `Start-Process $o -ArgumentList '/SILENT','/NORESTART' -Wait;` +
+          `${say('Git installer finished.', 'Green')}` +
+        `}catch{${say('Git install failed: $_', 'Red')}}` +
       `}` +
-    `}else{Write-Host '[CryDeck] Git already present.' -f DarkGray}`;
+    `}else{${say('Git already installed - skipping.', 'DarkGray')}}`;
   const claudeInstall =
     `if(-not(Get-Command claude -EA SilentlyContinue)){` +
-      `Write-Host '[CryDeck] Installing Claude Code...' -f Cyan;` +
+      `${say('Installing Claude Code (its output shows below)...', 'Cyan')};` +
       `try{irm https://claude.ai/install.ps1 | iex}` +
-      `catch{Write-Host \"[CryDeck] Claude Code install failed: $_\" -f Red}` +
-    `}else{Write-Host '[CryDeck] Claude Code already present.' -f DarkGray}`;
+      `catch{${say('Claude Code install failed: $_', 'Red')}}` +
+    `}else{${say('Claude Code already installed - skipping.', 'DarkGray')}}`;
   const refresh =
     `$env:Path=[Environment]::GetEnvironmentVariable('Path','Machine')+';'+[Environment]::GetEnvironmentVariable('Path','User')`;
-  // After the refresh, claude may live in a per-user dir that a fresh Machine
-  // PATH read does not include yet; only launch if it actually resolves, else
-  // tell the user plainly rather than firing a command that does nothing.
+  // Final summary: print the actual git/claude versions, or a red line naming
+  // what is still missing, so the user never has to guess whether it worked.
+  // Only launch claude when it truly resolves — never fire a no-op command.
   const finish =
-    `if(Get-Command claude -EA SilentlyContinue){${launch}}` +
-    `else{Write-Host '[CryDeck] Setup did not finish. Close and reopen CryDeck after checking the messages above.' -f Red}`;
+    `${say('----- Setup summary -----', 'White')};` +
+    `if(Get-Command git -EA SilentlyContinue){${say('Git OK: ', 'Green')};git --version}` +
+    `else{${say('Git is still MISSING.', 'Red')}};` +
+    `if(Get-Command claude -EA SilentlyContinue){` +
+      `${say('Claude Code OK - starting it now. Log in when it asks.', 'Green')};${launch}` +
+    `}else{` +
+      `${say('Claude Code is still MISSING. Read the messages above, then close and reopen CryDeck to retry.', 'Red')}` +
+    `}`;
   // The setup tab lands in Windows PowerShell 5.1 when pwsh is absent (a fresh
   // machine), and 5.1 does not negotiate TLS 1.2 by default — so the GitHub
   // API and install.ps1 fetches fail with an SSL/TLS error out of the box.
   // Enabling TLS 1.2 (not disabling validation) is the correct fix and is a
   // no-op on modern PowerShell.
   const tls = `[Net.ServicePointManager]::SecurityProtocol=[Net.SecurityProtocolType]::Tls12`;
-  return `$ErrorActionPreference='Continue'; ${tls}; ${gitInstall}; ${claudeInstall}; ${refresh}; ${finish}`;
+  const banner = say('Starting one-time setup. Watch this tab - each step reports below.', 'Cyan');
+  return `$ErrorActionPreference='Continue'; ${banner}; ${tls}; ${gitInstall}; ${claudeInstall}; ${refresh}; ${finish}`;
 }
 
 async function newSession(cwd, opts = {}) {
