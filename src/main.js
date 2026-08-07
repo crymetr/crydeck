@@ -96,6 +96,20 @@ function setupScript(launch) {
       `try{irm https://claude.ai/install.ps1 | iex}` +
       `catch{${say('Claude Code install failed: $_', 'Red')}}` +
     `}else{${say('Claude Code already installed - skipping.', 'DarkGray')}}`;
+  // The Claude Code installer drops claude.exe in %USERPROFILE%\.local\bin but
+  // does NOT add that to PATH — it only prints a "add it yourself" note. So the
+  // freshly installed claude is invisible to Get-Command and the whole setup
+  // looked like it failed. Persist that dir to the User PATH ourselves (once),
+  // so both this session and every future launch's env_check can see claude.
+  const claudePath =
+    `$b=Join-Path $env:USERPROFILE '.local\\bin';` +
+    `if(Test-Path (Join-Path $b 'claude.exe')){` +
+      `$u=[Environment]::GetEnvironmentVariable('Path','User');` +
+      `if($u -notlike ('*'+$b+'*')){` +
+        `[Environment]::SetEnvironmentVariable('Path',($u.TrimEnd(';')+';'+$b),'User');` +
+        `${say('Added Claude Code to your PATH.', 'Cyan')}` +
+      `}` +
+    `}`;
   const refresh =
     `$env:Path=[Environment]::GetEnvironmentVariable('Path','Machine')+';'+[Environment]::GetEnvironmentVariable('Path','User')`;
   // Final summary: print the actual git/claude versions, or a red line naming
@@ -117,7 +131,7 @@ function setupScript(launch) {
   // no-op on modern PowerShell.
   const tls = `[Net.ServicePointManager]::SecurityProtocol=[Net.SecurityProtocolType]::Tls12`;
   const banner = say('Starting one-time setup. Watch this tab - each step reports below.', 'Cyan');
-  return `$ErrorActionPreference='Continue'; ${banner}; ${tls}; ${gitInstall}; ${claudeInstall}; ${refresh}; ${finish}`;
+  return `$ErrorActionPreference='Continue'; ${banner}; ${tls}; ${gitInstall}; ${claudeInstall}; ${claudePath}; ${refresh}; ${finish}`;
 }
 
 async function newSession(cwd, opts = {}) {

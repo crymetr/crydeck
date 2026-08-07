@@ -3,6 +3,11 @@
 All notable changes to CryDeck. Format loosely follows Keep a Changelog;
 versions are git tags.
 
+## v0.9.5 - 2026-08-07
+
+### Fixed
+- The real first-run culprit: the Claude Code installer drops claude.exe in %USERPROFILE%\.local\bin but does not add it to PATH (it only prints a manual note), so setup installed Claude yet Get-Command never found it and the run looked like it failed. Setup now persists that directory to the user PATH itself, so Claude resolves immediately and on every later launch.
+
 ## v0.9.4 - 2026-08-07
 
 ### Fixed
