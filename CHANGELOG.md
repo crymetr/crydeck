@@ -6,7 +6,7 @@ versions are git tags.
 ## v0.9.3 - 2026-08-07
 
 ### Fixed
-- First-run setup silently did nothing on machines without winget (common on stock/home Windows): the install steps were chained so a missing winget swallowed the rest. Setup is now self-correcting and talks the whole way through — Git falls back from winget to the direct git-for-windows installer (resolved via the GitHub API so it never 404s on a version bump), failures print a clear message, and every step announces what it is doing so a stuck one is visible. If setup can't finish, it says so instead of firing a launch that does nothing.
+- First-run setup silently did nothing on machines without winget (common on stock/home Windows): the install steps were chained so a missing winget swallowed the rest. Setup is now self-correcting and talks the whole way through — Git falls back from winget to the direct git-for-windows installer (resolved via the GitHub API so it never 404s on a version bump), failures print a clear message, and every step announces what it is doing so a stuck one is visible. It also enables TLS 1.2 first, since the setup tab lands in Windows PowerShell 5.1 on a fresh machine and 5.1 otherwise fails the GitHub/installer fetches with an SSL error. If setup can't finish, it says so instead of firing a launch that does nothing.
 
 ## v0.9.2 - 2026-08-06
 

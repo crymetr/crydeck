@@ -96,7 +96,13 @@ function setupScript(launch) {
   const finish =
     `if(Get-Command claude -EA SilentlyContinue){${launch}}` +
     `else{Write-Host '[CryDeck] Setup did not finish. Close and reopen CryDeck after checking the messages above.' -f Red}`;
-  return `$ErrorActionPreference='Continue'; ${gitInstall}; ${claudeInstall}; ${refresh}; ${finish}`;
+  // The setup tab lands in Windows PowerShell 5.1 when pwsh is absent (a fresh
+  // machine), and 5.1 does not negotiate TLS 1.2 by default — so the GitHub
+  // API and install.ps1 fetches fail with an SSL/TLS error out of the box.
+  // Enabling TLS 1.2 (not disabling validation) is the correct fix and is a
+  // no-op on modern PowerShell.
+  const tls = `[Net.ServicePointManager]::SecurityProtocol=[Net.SecurityProtocolType]::Tls12`;
+  return `$ErrorActionPreference='Continue'; ${tls}; ${gitInstall}; ${claudeInstall}; ${refresh}; ${finish}`;
 }
 
 async function newSession(cwd, opts = {}) {
