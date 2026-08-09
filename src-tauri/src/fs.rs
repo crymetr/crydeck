@@ -213,6 +213,84 @@ pub fn git_diff(root: String, path: String) -> String {
     run(&["-C", &root, "diff", "--no-index", "--", "NUL", &path], true)
 }
 
+/// Tracked + untracked (respecting .gitignore) file list for the Cmd+P finder.
+/// Forward slashes, capped so a giant repo can't flood the palette. Empty when
+/// the folder isn't a git repo — the finder just shows nothing then.
+#[tauri::command]
+pub fn git_ls_files(root: String) -> Vec<String> {
+    let out = match quiet("git")
+        .args([
+            "-C",
+            &root,
+            "ls-files",
+            "--cached",
+            "--others",
+            "--exclude-standard",
+        ])
+        .output()
+    {
+        Ok(o) if o.status.success() => o.stdout,
+        _ => return Vec::new(),
+    };
+    String::from_utf8_lossy(&out)
+        .lines()
+        .take(20_000)
+        .map(|s| s.to_string())
+        .collect()
+}
+
+#[derive(Serialize)]
+pub struct GrepHit {
+    file: String,
+    line: u32,
+    text: String,
+}
+
+/// Find-in-files (Cmd+Shift+F), backed by `git grep`: tracked content only,
+/// case-insensitive, binary files skipped, capped. Empty query or non-repo
+/// returns nothing.
+#[tauri::command]
+pub fn git_grep(root: String, query: String) -> Vec<GrepHit> {
+    if query.trim().is_empty() {
+        return Vec::new();
+    }
+    let out = match quiet("git")
+        .args([
+            "-C", &root, "grep", "-n", "-I", "-i", "--no-color", "-e", &query,
+        ])
+        .output()
+    {
+        Ok(o) if o.status.success() || o.status.code() == Some(1) => o.stdout,
+        _ => return Vec::new(),
+    };
+    String::from_utf8_lossy(&out)
+        .lines()
+        .take(500)
+        .filter_map(|l| {
+            // path:line:text
+            let (file, rest) = l.split_once(':')?;
+            let (line, text) = rest.split_once(':')?;
+            Some(GrepHit {
+                file: file.to_string(),
+                line: line.parse().unwrap_or(0),
+                text: text.chars().take(200).collect(),
+            })
+        })
+        .collect()
+}
+
+/// Open the folder in VS Code. `code` is a .cmd shim, so it needs a shell to
+/// resolve; cmd /c handles that. No-op-ish if VS Code isn't installed (the
+/// child just fails silently, like the other os handoffs).
+#[tauri::command]
+pub fn open_in_editor(root: String) -> Result<(), String> {
+    quiet("cmd")
+        .args(["/c", "code", &root])
+        .spawn()
+        .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
 fn on_path(cmd: &str) -> bool {
     quiet("where.exe")
         .arg(cmd)

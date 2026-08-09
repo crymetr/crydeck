@@ -20,7 +20,7 @@ Maestri, Terminal Graph, Orca) done Aug 2026.
 
 ## Phases
 
-### Phase 1 — Orchestration core (flagship)
+### Phase 1 — Orchestration core (flagship) — DONE (v0.10.0)
 
 A `crydeck` session-control CLI backed by loopback gateway routes (token-auth,
 never exposed off localhost). Any Claude session can call it via Bash:
@@ -40,7 +40,7 @@ sharing, and orchestration ("you are the orchestrator, spawn a frontend
 session"). Does not depend on Claude's native cross-session feature, so it works
 on native Windows today. If that feature ever lands on Windows, it layers on top.
 
-### Phase 2 — Daily quick wins
+### Phase 2 — Daily quick wins — DONE (v0.11.0)
 
 - Fuzzy file finder (Cmd+P, backed by `git ls-files`).
 - Find-in-files (backed by `git grep`).

@@ -12,6 +12,7 @@ import { getCurrentWindow } from '@tauri-apps/api/window';
 import { check as checkUpdate } from '@tauri-apps/plugin-updater';
 import { relaunch } from '@tauri-apps/plugin-process';
 import { enable as autostartEnable, disable as autostartDisable, isEnabled as autostartIsEnabled } from '@tauri-apps/plugin-autostart';
+import { sendNotification, isPermissionGranted, requestPermission } from '@tauri-apps/plugin-notification';
 import { marked } from 'marked';
 import { getVersion } from '@tauri-apps/api/app';
 import changelogRaw from '../CHANGELOG.md?raw';
@@ -332,7 +333,7 @@ function activate(s) {
   for (const o of sessions.values()) {
     o.box.classList.toggle('active', o === s);
     o.tabEl?.classList.toggle('active', o === s);
-    if (o === s) o.tabEl?.classList.remove('busy', 'attn');
+    if (o === s) { o.tabEl?.classList.remove('busy', 'attn'); o.notified = false; }
     o.tree.el.style.display = o === s ? '' : 'none';
     if (o !== s) invoke('preview_visible', { tab: o.ptyId, visible: false, rect: null }).catch(() => {});
   }
@@ -1109,9 +1110,214 @@ setInterval(() => {
     if (s.tabEl.classList.contains('busy') && Date.now() - (s.lastOut || 0) > 3000) {
       s.tabEl.classList.remove('busy');
       s.tabEl.classList.add('attn');
+      notifyAttn(s);
     }
   }
 }, 1000);
+
+// A background session just went quiet (Claude finished or is waiting on you).
+// Fire one desktop notification per transition; clicking the tab clears attn,
+// so the next quiet period notifies again. Permission is requested lazily.
+let notifyOk = false;
+isPermissionGranted().then(async (g) => { notifyOk = g || (await requestPermission()) === 'granted'; }).catch(() => {});
+function notifyAttn(s) {
+  if (!notifyOk || s.notified) return;
+  s.notified = true;
+  const name = (s.tabEl?.querySelector('.name')?.textContent || basename(s.cwd)).trim();
+  try { sendNotification({ title: 'CryDeck', body: `${name} needs you` }); } catch {}
+}
+
+/* ---------- command palette: files / search / prompts ---------- */
+// Shortcuts use Ctrl+Shift+* on purpose: bare Ctrl+letter belongs to the
+// shell's readline (Ctrl+P history, Ctrl+E end-of-line, Ctrl+K kill), and a
+// terminal must not steal those. Ctrl+Shift+* is free.
+//   Ctrl+Shift+P  find file       -> inserts @path into the active session
+//   Ctrl+Shift+F  search in files -> inserts @file
+//   Ctrl+Shift+E  open folder in VS Code
+//   Ctrl+Shift+K  prompt library  -> types a saved prompt into the session
+
+let paletteOpen = false;
+
+function insertIntoActive(text) {
+  if (!active) return;
+  invoke('pty_write', { id: active.ptyId, data: text });
+  active.term?.focus();
+}
+
+function fuzzy(items, q) {
+  q = (q || '').trim().toLowerCase();
+  if (!q) return items.slice(0, 300);
+  const scored = [];
+  for (const it of items) {
+    const s = it.toLowerCase();
+    let qi = 0, streak = 0, score = 0;
+    for (let i = 0; i < s.length && qi < q.length; i++) {
+      if (s[i] === q[qi]) { qi++; streak++; score += streak; } else streak = 0;
+    }
+    if (qi === q.length) {
+      if ((s.split(/[\\/]/).pop() || '').includes(q)) score += 50;
+      score -= s.length * 0.05;
+      scored.push([score, it]);
+    }
+  }
+  scored.sort((a, b) => b[0] - a[0]);
+  return scored.map((x) => x[1]).slice(0, 300);
+}
+
+function openPalette({ placeholder, onInput, onPick, initial = [] }) {
+  paletteOpen = true;
+  const wrap = document.createElement('div');
+  wrap.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.45);display:flex;align-items:flex-start;justify-content:center;z-index:9998;padding-top:12vh';
+  const box = document.createElement('div');
+  box.style.cssText = 'background:#17171c;border:1px solid #2a2a32;border-radius:8px;width:600px;max-width:92vw;color:#d8d8de;font:13px system-ui;box-shadow:0 12px 40px rgba(0,0,0,.55);overflow:hidden';
+  const input = document.createElement('input');
+  input.placeholder = placeholder;
+  input.style.cssText = 'width:100%;box-sizing:border-box;padding:12px 14px;background:#101014;border:none;border-bottom:1px solid #2a2a32;color:#eee;font:13px system-ui;outline:none';
+  const list = document.createElement('div');
+  list.style.cssText = 'max-height:46vh;overflow:auto';
+  box.append(input, list);
+  wrap.append(box);
+  document.body.append(wrap);
+  let rows = [], sel = 0;
+  const paint = () => {
+    [...list.children].forEach((c, i) => { c.style.background = i === sel ? '#1e2a44' : ''; });
+    list.children[sel]?.scrollIntoView({ block: 'nearest' });
+  };
+  const render = (items) => {
+    rows = items || [];
+    sel = 0;
+    list.innerHTML = '';
+    rows.forEach((it, i) => {
+      const r = document.createElement('div');
+      r.style.cssText = 'padding:7px 14px;cursor:pointer;white-space:nowrap;overflow:hidden;text-overflow:ellipsis';
+      r.innerHTML = it.html || esc(it.label || it.value || '');
+      r.onmouseenter = () => { sel = i; paint(); };
+      r.onclick = () => pick(i);
+      list.append(r);
+    });
+    paint();
+  };
+  const pick = (i) => { const it = rows[i]; close(); if (it) onPick(it); };
+  const close = () => { paletteOpen = false; wrap.remove(); window.removeEventListener('keydown', onKey, true); active?.term?.focus(); };
+  const onKey = (e) => {
+    if (e.key === 'Escape') { e.preventDefault(); close(); }
+    else if (e.key === 'ArrowDown') { e.preventDefault(); sel = Math.min(sel + 1, rows.length - 1); paint(); }
+    else if (e.key === 'ArrowUp') { e.preventDefault(); sel = Math.max(sel - 1, 0); paint(); }
+    else if (e.key === 'Enter') { e.preventDefault(); pick(sel); }
+  };
+  window.addEventListener('keydown', onKey, true);
+  let timer;
+  input.addEventListener('input', () => {
+    clearTimeout(timer);
+    timer = setTimeout(async () => { render(await onInput(input.value)); }, 110);
+  });
+  render(initial);
+  input.focus();
+}
+
+async function filesPalette() {
+  if (!active) return;
+  const all = await invoke('git_ls_files', { root: active.cwd }).catch(() => []);
+  if (!all.length) { uiConfirm('No git-tracked files here (not a repo, or empty).', 'OK'); return; }
+  const toRows = (arr) => arr.map((f) => ({ value: f, label: f }));
+  openPalette({
+    placeholder: 'Find file — inserts @path into the session',
+    initial: toRows(all.slice(0, 300)),
+    onInput: (q) => toRows(fuzzy(all, q)),
+    onPick: (it) => insertIntoActive(`@${it.value} `),
+  });
+}
+
+async function grepPalette() {
+  if (!active) return;
+  openPalette({
+    placeholder: 'Search in files (git grep) — Enter inserts @file',
+    onInput: async (q) => {
+      if (!q.trim()) return [];
+      const hits = await invoke('git_grep', { root: active.cwd, query: q }).catch(() => []);
+      return hits.map((h) => ({
+        value: h.file,
+        html: `<span style="color:#7aa2ff">${esc(h.file)}:${h.line}</span>  <span style="color:#8a8a94">${esc((h.text || '').trim())}</span>`,
+      }));
+    },
+    onPick: (it) => insertIntoActive(`@${it.value} `),
+  });
+}
+
+function loadPrompts() { try { return JSON.parse(localStorage.getItem('cockpit.prompts') || '[]'); } catch { return []; } }
+function savePrompts(p) { localStorage.setItem('cockpit.prompts', JSON.stringify(p)); }
+
+function promptsPalette() {
+  if (!active) return;
+  const items = (q = '') => {
+    const p = loadPrompts();
+    const ql = q.toLowerCase();
+    const rows = p
+      .map((t, idx) => ({ value: t, idx }))
+      .filter((r) => !ql || r.value.toLowerCase().includes(ql))
+      .map((r) => ({ ...r, html: esc(r.value.length > 90 ? r.value.slice(0, 90) + '…' : r.value) }));
+    rows.push({ add: true, html: '<span style="color:#7aa2ff">＋ Save a new prompt…</span>' });
+    return rows;
+  };
+  openPalette({
+    placeholder: 'Prompts — Enter types the prompt into the session',
+    initial: items(),
+    onInput: (q) => items(q),
+    onPick: async (it) => {
+      if (it.add) {
+        const t = await uiPrompt('New prompt text');
+        if (t && t.trim()) { const p = loadPrompts(); p.push(t.trim()); savePrompts(p); }
+        return;
+      }
+      insertIntoActive(it.value);
+    },
+  });
+}
+
+// Minimal one-line text prompt, styled like uiConfirm. Resolves to the string
+// or null on cancel.
+function uiPrompt(msg) {
+  return new Promise((resolve) => {
+    const wrap = document.createElement('div');
+    wrap.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.55);display:flex;align-items:center;justify-content:center;z-index:9999';
+    const card = document.createElement('div');
+    card.style.cssText = 'background:#17171c;border:1px solid #2a2a32;border-radius:8px;padding:18px 20px;width:420px;color:#d8d8de;font:13px system-ui';
+    const p = document.createElement('div');
+    p.textContent = msg;
+    p.style.cssText = 'margin-bottom:10px';
+    const inp = document.createElement('input');
+    inp.style.cssText = 'width:100%;box-sizing:border-box;padding:8px 10px;background:#101014;border:1px solid #2a2a32;border-radius:5px;color:#eee;font:13px system-ui;outline:none;margin-bottom:12px';
+    const row = document.createElement('div');
+    row.style.cssText = 'display:flex;gap:8px;justify-content:flex-end';
+    const done = (v) => { wrap.remove(); resolve(v); };
+    const mk = (label, val, accent) => {
+      const b = document.createElement('button');
+      b.textContent = label;
+      b.style.cssText = `padding:6px 14px;border-radius:6px;border:1px solid ${accent ? '#2a5' : '#3a3a44'};background:${accent ? '#264d2e' : '#22222a'};color:#eee;cursor:pointer;font:12.5px system-ui`;
+      b.onclick = () => done(val === 'ok' ? inp.value : null);
+      return b;
+    };
+    row.append(mk('Cancel', 'cancel', false), mk('Save', 'ok', true));
+    inp.addEventListener('keydown', (e) => { if (e.key === 'Enter') done(inp.value); if (e.key === 'Escape') done(null); });
+    card.append(p, inp, row);
+    wrap.append(card);
+    document.body.append(wrap);
+    inp.focus();
+  });
+}
+
+window.addEventListener('keydown', (e) => {
+  if (!e.ctrlKey || !e.shiftKey || e.altKey) return;
+  const k = e.key.toLowerCase();
+  if (!'pfek'.includes(k)) return;
+  e.preventDefault();
+  e.stopPropagation();
+  if (paletteOpen) return;
+  if (k === 'p') filesPalette();
+  else if (k === 'f') grepPalette();
+  else if (k === 'e') { if (active) invoke('open_in_editor', { root: active.cwd }).catch(() => {}); }
+  else if (k === 'k') promptsPalette();
+}, true);
 
 /* ---------- extra terminals under the preview ---------- */
 
@@ -1418,6 +1624,11 @@ async function showAbout() {
       <input type="checkbox" id="ab-autostart" style="cursor:pointer">
       <span>Start CryDeck when Windows starts</span>
     </label>
+    <div style="margin-top:12px;font-size:11.5px;color:#8a8a94;line-height:1.7">
+      <b style="color:#aab">Shortcuts</b><br>
+      Ctrl+Shift+P find file &nbsp;·&nbsp; Ctrl+Shift+F search in files<br>
+      Ctrl+Shift+E open in VS Code &nbsp;·&nbsp; Ctrl+Shift+K prompts
+    </div>
     <div id="ab-body" style="display:none;margin-top:12px;max-height:300px;overflow:auto;border-top:1px solid #2a2a32;padding-top:10px;font-size:12px;line-height:1.5"></div>`;
   card.querySelectorAll('a[data-url]').forEach((a) => {
     a.onclick = (e) => { e.preventDefault(); invoke('os_open', { path: a.dataset.url }); };

@@ -3,6 +3,16 @@
 All notable changes to CryDeck. Format loosely follows Keep a Changelog;
 versions are git tags.
 
+## v0.11.0 - 2026-08-10
+
+### Added
+- **Find file (Ctrl+Shift+P).** Fuzzy finder over the repo's git-tracked files; picking one inserts `@path` into the active session so you can reference it to Claude.
+- **Search in files (Ctrl+Shift+F).** `git grep` across the repo; picking a hit inserts `@file`.
+- **Open in VS Code (Ctrl+Shift+E).** Opens the active session's folder in VS Code.
+- **Prompt library (Ctrl+Shift+K).** Save prompts you reuse and type them into a session with one pick.
+- **Desktop notifications.** When a background session goes quiet (Claude finished or is waiting on you), CryDeck raises a notification so you can look away and get pulled back.
+- Shortcuts are listed in the About card (ⓘ). They use Ctrl+Shift+* on purpose, so they never clobber the shell's own Ctrl+P / Ctrl+E / Ctrl+K.
+
 ## v0.10.0 - 2026-08-09
 
 ### Added
