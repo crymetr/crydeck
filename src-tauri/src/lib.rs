@@ -13,6 +13,7 @@ pub fn run() {
     // exposes a toggle; the plugin writes/removes the HKCU Run entry on Windows.
     .plugin(tauri_plugin_autostart::Builder::new().build())
     .manage(pty::PtyState::default())
+    .manage(pty::ControlState::default())
     .manage(watch::WatchState::default())
     .manage(preview::PreviewState::default())
     .invoke_handler(tauri::generate_handler![
@@ -22,6 +23,7 @@ pub fn run() {
       pty::pty_kill,
       pty::pty_kill_all,
       pty::bench_report,
+      pty::control_sync,
       fs::fs_list,
       fs::fs_read,
       fs::os_open,

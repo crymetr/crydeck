@@ -6,7 +6,7 @@
 //   - Ctrl-C is the byte 0x03 travelling through the PTY, not a Win32 console event
 //   - killing a session must take the whole process tree, not just the direct child
 
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::io::{Read, Write};
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Mutex;
@@ -106,6 +106,10 @@ const BATCH_BYTES: usize = 32 * 1024;
 const BATCH_INTERVAL: Duration = Duration::from_millis(12);
 /// Single read syscall size.
 const READ_BUF: usize = 64 * 1024;
+/// How much of each session's recent output is kept for `crydeck read`. A rough
+/// screenful or two of scrollback — enough for one session to hand another its
+/// last result, not a full transcript.
+const RECENT_CAP: usize = 24 * 1024;
 
 pub struct Session {
     master: Box<dyn MasterPty + Send>,
@@ -119,6 +123,9 @@ pub struct Session {
     pid: Option<u32>,
     job: Option<job::Job>,
     reader_tid: Arc<std::sync::atomic::AtomicU32>,
+    /// Rolling tail of raw output bytes, capped at RECENT_CAP. Shared with the
+    /// reader thread; read out (ANSI-stripped) by `crydeck read`.
+    recent: Arc<Mutex<VecDeque<u8>>>,
 }
 
 /// Tear a session down completely: process tree first, then the parked reader.
@@ -140,6 +147,27 @@ fn kill_session(mut s: Session) {
 pub struct PtyState {
     sessions: Mutex<HashMap<u32, Session>>,
     next_id: AtomicU32,
+}
+
+/// UI-facing session roster for `crydeck list`. The PtyState map also holds
+/// extra shells and setup shells, which are not tabs — so the frontend is the
+/// authority on what counts as a session, and pushes its tab list here whenever
+/// tabs change. The gateway reads this, never the raw pty map.
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
+pub struct SessionMeta {
+    pub id: u32,
+    pub name: String,
+    pub cwd: String,
+}
+
+#[derive(Default)]
+pub struct ControlState {
+    pub sessions: Mutex<Vec<SessionMeta>>,
+}
+
+#[tauri::command]
+pub fn control_sync(state: tauri::State<'_, ControlState>, sessions: Vec<SessionMeta>) {
+    *state.sessions.lock().unwrap() = sessions;
 }
 
 #[tauri::command]
@@ -217,6 +245,8 @@ pub fn pty_spawn(
     // JSON encode/decode of terminal output on the hot path.
     let out = on_output.clone();
     let tid_slot = reader_tid.clone();
+    let recent = Arc::new(Mutex::new(VecDeque::with_capacity(RECENT_CAP)));
+    let recent_w = recent.clone();
     std::thread::spawn(move || {
         tid_slot.store(
             unsafe { windows::Win32::System::Threading::GetCurrentThreadId() },
@@ -243,6 +273,14 @@ pub fn pty_spawn(
                 Ok(n) => {
                     bytes += n as u64;
                     batch.extend_from_slice(&buf[..n]);
+                    {
+                        let mut r = recent_w.lock().unwrap();
+                        r.extend(buf[..n].iter().copied());
+                        let over = r.len().saturating_sub(RECENT_CAP);
+                        if over > 0 {
+                            r.drain(0..over);
+                        }
+                    }
                     if batch.len() >= BATCH_BYTES || last_flush.elapsed() >= BATCH_INTERVAL {
                         let t_send = Instant::now();
                         let sent = out.send(InvokeResponseBody::Raw(std::mem::take(&mut batch)));
@@ -288,10 +326,81 @@ pub fn pty_spawn(
             pid,
             job,
             reader_tid,
+            recent,
         },
     );
 
     Ok(id)
+}
+
+/// Strip ANSI/VT escape sequences so `crydeck read` hands another session clean
+/// text, not control-code soup. Covers CSI (ESC[ ... final), OSC (ESC] ... BEL
+/// or ST), and lone two-byte ESC sequences — enough for terminal output.
+fn strip_ansi(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    let mut chars = s.chars().peekable();
+    while let Some(c) = chars.next() {
+        if c != '\x1b' {
+            if c != '\r' {
+                out.push(c);
+            }
+            continue;
+        }
+        match chars.peek() {
+            Some('[') => {
+                chars.next();
+                for f in chars.by_ref() {
+                    if ('@'..='~').contains(&f) {
+                        break;
+                    }
+                }
+            }
+            Some(']') => {
+                chars.next();
+                while let Some(f) = chars.next() {
+                    if f == '\x07' {
+                        break;
+                    }
+                    if f == '\x1b' && chars.peek() == Some(&'\\') {
+                        chars.next();
+                        break;
+                    }
+                }
+            }
+            Some(_) => {
+                chars.next();
+            }
+            None => {}
+        }
+    }
+    out
+}
+
+/// `crydeck read <id> [--tail N]`: the last N lines of a session's output,
+/// ANSI-stripped. tail == 0 returns the whole retained buffer. None if the
+/// session id is unknown.
+pub fn read_recent(state: &PtyState, id: u32, tail: usize) -> Option<String> {
+    let sessions = state.sessions.lock().unwrap();
+    let s = sessions.get(&id)?;
+    let bytes: Vec<u8> = s.recent.lock().unwrap().iter().copied().collect();
+    let text = strip_ansi(&String::from_utf8_lossy(&bytes));
+    if tail == 0 {
+        return Some(text);
+    }
+    let lines: Vec<&str> = text.lines().collect();
+    let start = lines.len().saturating_sub(tail);
+    Some(lines[start..].join("\n"))
+}
+
+/// `crydeck send <id> "text"`: write text into a session's stdin exactly like a
+/// keystroke would. Callers append their own newline to submit.
+pub fn send_text(state: &PtyState, id: u32, text: &str) -> Result<(), String> {
+    let mut sessions = state.sessions.lock().unwrap();
+    let s = sessions.get_mut(&id).ok_or("no such session")?;
+    s.writer
+        .write_all(text.as_bytes())
+        .map_err(|e| e.to_string())?;
+    s.writer.flush().map_err(|e| e.to_string())
 }
 
 #[tauri::command]

@@ -273,6 +273,14 @@ async function newSession(cwd, opts = {}) {
       invoke('pty_write', { id: s.ptyId, data: setupScript(launch) + '\r' });
     } else {
       invoke('pty_write', { id: s.ptyId, data: `${launch}\r` });
+      // Seeded prompt from `crydeck spawn <folder> <prompt>`: give Claude a few
+      // seconds to finish launching, then type the first message into it.
+      if (opts.seed) {
+        const seed = opts.seed;
+        setTimeout(() => {
+          if (sessions.has(s.ptyId)) invoke('pty_write', { id: s.ptyId, data: `${seed}\r` });
+        }, 6000);
+      }
     }
   }, 2500);
 
@@ -438,6 +446,14 @@ function cancelAutoCont(s) {
 
 function persistTabs() {
   localStorage.setItem('cockpit.tabs', JSON.stringify([...sessions.values()].map((s) => s.cwd)));
+  // Keep the backend session roster (for `crydeck list`) in step with the tabs.
+  // Name comes from the tab title when Claude has narrated one, else the folder.
+  const roster = [...sessions.values()].map((s) => ({
+    id: s.ptyId,
+    name: (s.tabEl?.querySelector('.name')?.textContent || basename(s.cwd)).trim(),
+    cwd: s.cwd,
+  }));
+  invoke('control_sync', { sessions: roster }).catch(() => {});
 }
 
 function renderEmpty() {
@@ -949,6 +965,19 @@ listen('cockpit-status', (ev) => {
   s.status = j;
   s.statusAt = Date.now();
   if (s === active) renderStatus();
+});
+
+// `crydeck spawn <folder> [prompt]` arrives here via the gateway. Open the
+// session and, if a prompt was seeded, let newSession type it once Claude is up.
+listen('cockpit-spawn', async (ev) => {
+  let cwd, prompt;
+  try { const p = JSON.parse(ev.payload.raw); cwd = p.cwd; prompt = p.prompt; } catch { return; }
+  if (!cwd) return;
+  try {
+    const s = await newSession(cwd, { seed: prompt && prompt.trim() ? prompt.trim() : undefined });
+    if (s) activate(s);
+    trace(`crydeck spawn at ${cwd}${prompt ? ' (seeded)' : ''}`);
+  } catch (e) { trace(`crydeck spawn failed: ${e}`); }
 });
 
 listen('cockpit-tool', (ev) => {

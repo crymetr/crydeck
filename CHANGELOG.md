@@ -3,6 +3,16 @@
 All notable changes to CryDeck. Format loosely follows Keep a Changelog;
 versions are git tags.
 
+## v0.10.0 - 2026-08-09
+
+### Added
+- **Session orchestration (`crydeck` CLI).** Any session can now drive the others through a small command on its PATH, backed by loopback-only, token-authed gateway routes:
+  - `crydeck spawn <folder> [prompt...]` opens a new session and optionally types its first message. This is what lets you open a NEW session from your phone: steer a dispatcher session over Remote Control and tell it to spawn.
+  - `crydeck list` shows open sessions with their ids.
+  - `crydeck read <id> [tailLines]` reads another session's recent output (ANSI-stripped) for cross-terminal context.
+  - `crydeck send <id> <text...>` types a message into another session.
+  This is the Windows-native stand-in for Claude Code's cross-session messaging (which is macOS/Linux only), and it needs no new open ports. See ROADMAP.md for where this is going.
+
 ## v0.9.7 - 2026-08-07
 
 ### Added
