@@ -6,7 +6,7 @@
 <style>
   :root {
     --bg: #0d0d10; --bg2: #16161c; --bg3: #1c1c24; --line: #26262f;
-    --fg: #d8d8de; --dim: #8a8a96; --accent: #4d9fff; --changed: #e2b93d;
+    --fg: #d8d8de; --dim: #8a8a96; --accent: #4d9fff; --changed: #e2b93d; --blocked: #e5484d;
     --tree-w: 230px; --preview-w: 420px;
   }
   * { box-sizing: border-box; }
@@ -37,6 +37,8 @@
   .tab.sched .schedicon { display: inline; }
   .tab.busy .badge { display: inline-block; background: var(--accent); animation: tabpulse 1.2s ease-in-out infinite; }
   .tab.attn .badge { display: inline-block; background: var(--changed); }
+  /* Claude rang for you (permission / waiting): red, pulsing, most urgent. */
+  .tab.blocked .badge { display: inline-block; background: var(--blocked); animation: tabpulse 1.2s ease-in-out infinite; }
   @keyframes tabpulse { 0%,100% { opacity: .35; } 50% { opacity: 1; } }
   #newtab { border: 1px dashed var(--line); background: none; color: var(--dim);
     border-radius: 6px 6px 0 0; padding: 0 12px; cursor: pointer; font: inherit; }

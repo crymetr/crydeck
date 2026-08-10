@@ -226,15 +226,21 @@ async function newSession(cwd, opts = {}) {
     const text = s.decoder.decode(bytes, { stream: true });
     s.term.write(text);
     scanUrls(s, text);
-    // Attention tracking: a background tab shows a blue pulse while its Claude
-    // is producing output, flipping to amber once it goes quiet (finished, or
-    // waiting on you). A BEL rings amber immediately.
+    // Four-state tab badge for a background session:
+    //   working (blue pulse)  output is flowing
+    //   done    (amber)       output went quiet after working
+    //   blocked (red pulse)   Claude rang the bell — permission or waiting on you
+    //   idle    (no badge)    nothing happening
+    // A BEL means blocked and wins over plain output in the same chunk; any
+    // other output means working (Claude resumed), clearing done/blocked.
     s.lastOut = Date.now();
     if (s !== active && s.tabEl) {
       if (text.includes('\x07')) {
-        s.tabEl.classList.remove('busy');
-        s.tabEl.classList.add('attn');
-      } else if (!s.tabEl.classList.contains('attn')) {
+        s.tabEl.classList.remove('busy', 'attn');
+        s.tabEl.classList.add('blocked');
+        notifyAttn(s);
+      } else {
+        s.tabEl.classList.remove('blocked', 'attn');
         s.tabEl.classList.add('busy');
       }
     }
@@ -333,7 +339,7 @@ function activate(s) {
   for (const o of sessions.values()) {
     o.box.classList.toggle('active', o === s);
     o.tabEl?.classList.toggle('active', o === s);
-    if (o === s) { o.tabEl?.classList.remove('busy', 'attn'); o.notified = false; }
+    if (o === s) { o.tabEl?.classList.remove('busy', 'attn', 'blocked'); o.notified = false; }
     o.tree.el.style.display = o === s ? '' : 'none';
     if (o !== s) invoke('preview_visible', { tab: o.ptyId, visible: false, rect: null }).catch(() => {});
   }
@@ -1606,7 +1612,7 @@ const FEATURES_MD = `
 **Sessions**
 - Each tab is a Claude Code session in a folder. Open as many as you like.
 - Close the app and reopen it: your tabs come back and each Claude conversation resumes.
-- The tab dot pulses blue while Claude works and turns amber when it finishes or needs you.
+- The tab dot tells you each session's state at a glance: **blue** working, **amber** done, **red** waiting on you (a permission or a question).
 
 **First run, from zero**
 - On a fresh PC, one click installs PowerShell 7, Git, and Claude Code, then logs you in. Nothing to set up by hand.

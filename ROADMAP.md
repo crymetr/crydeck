@@ -50,7 +50,7 @@ on native Windows today. If that feature ever lands on Windows, it layers on top
 
 Low effort, self-contained, brings the daily experience level with Termic/Superset.
 
-### Phase 3 — Agent state awareness
+### Phase 3 — Agent state awareness — DONE (v0.12.0)
 
 Upgrade the tab badge from two states (busy / attention) to herdr's four:
 idle / working / blocked (waiting on you) / done. Pairs with Phase 2

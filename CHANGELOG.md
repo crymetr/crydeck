@@ -3,6 +3,11 @@
 All notable changes to CryDeck. Format loosely follows Keep a Changelog;
 versions are git tags.
 
+## v0.12.0 - 2026-08-10
+
+### Changed
+- **Four-state tab badge.** The session dot now distinguishes waiting-on-you from finished: blue (working), amber (done), red pulse (blocked — Claude rang for a permission or a question), or no dot (idle). Previously a bell and a quiet finish both showed the same amber, so you couldn't tell an urgent prompt from a completed run at a glance. A red badge also raises a desktop notification.
+
 ## v0.11.1 - 2026-08-10
 
 ### Added
