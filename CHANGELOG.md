@@ -3,6 +3,11 @@
 All notable changes to CryDeck. Format loosely follows Keep a Changelog;
 versions are git tags.
 
+## v0.11.1 - 2026-08-10
+
+### Added
+- **Features panel in the About card (ⓘ).** A plain-language list of everything CryDeck can do — sessions, first-run setup, Remote Control, the crydeck CLI, shortcuts, notifications, and more — so nothing has to be discovered by accident. Sits beside the Changelog button.
+
 ## v0.11.0 - 2026-08-10
 
 ### Added

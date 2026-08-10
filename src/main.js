@@ -1599,6 +1599,46 @@ async function boot() {
 }
 boot();
 
+// Everything CryDeck can do, in plain language, so a new user never has to
+// stumble onto a feature. Rendered in the About card's Features panel. Keep it
+// in step with the changelog when a user-facing feature lands.
+const FEATURES_MD = `
+**Sessions**
+- Each tab is a Claude Code session in a folder. Open as many as you like.
+- Close the app and reopen it: your tabs come back and each Claude conversation resumes.
+- The tab dot pulses blue while Claude works and turns amber when it finishes or needs you.
+
+**First run, from zero**
+- On a fresh PC, one click installs PowerShell 7, Git, and Claude Code, then logs you in. Nothing to set up by hand.
+
+**From your phone (Remote Control)**
+- Start a session with Claude's Remote Control and steer it from your phone or the web.
+- Tell a session to spawn another (see the crydeck CLI below), so you can open new work from your phone too.
+
+**Drive one session from another — the \`crydeck\` CLI**
+- \`crydeck spawn <folder> [prompt]\` — open a new session, optionally with its first message.
+- \`crydeck list\` — list your open sessions and their ids.
+- \`crydeck read <id> [lines]\` — read another session's recent output.
+- \`crydeck send <id> <text>\` — send a message into another session.
+- Any session can run these (ask Claude to), so one session can orchestrate the rest.
+
+**Keyboard shortcuts**
+- **Ctrl+Shift+P** — find a file (fuzzy); inserts \`@path\` into the session.
+- **Ctrl+Shift+F** — search across files; inserts \`@file\`.
+- **Ctrl+Shift+E** — open the folder in VS Code.
+- **Ctrl+Shift+K** — your saved prompts; pick one to type it in.
+
+**While you work**
+- Desktop notification when a background session goes quiet, so you can look away.
+- File tree on the left; a preview pane on the right (File / running App / Feed).
+- Built-in diff view and git change marks.
+- Up to three extra plain terminals under each session.
+- Copy with Ctrl+C on a selection, paste with Ctrl+V or right-click.
+
+**Housekeeping**
+- Start CryDeck with Windows (toggle above), and one-click auto-update from GitHub.
+`;
+
 // Minimal about card: version, links, changelog. Links open in the default
 // browser via os_open (cmd start) — no opener plugin needed.
 async function showAbout() {
@@ -1613,6 +1653,7 @@ async function showAbout() {
     <div style="display:flex;align-items:baseline;gap:8px;margin-bottom:10px">
       <b style="font-size:14px">CryDeck</b><span style="color:#8a8a94">v${esc(ver)}</span>
       <span style="flex:1"></span>
+      <button id="ab-feat" style="background:#22222a;border:1px solid #3a3a44;border-radius:5px;color:#ccc;padding:3px 9px;cursor:pointer;font:11.5px system-ui">Features</button>
       <button id="ab-log" style="background:#22222a;border:1px solid #3a3a44;border-radius:5px;color:#ccc;padding:3px 9px;cursor:pointer;font:11.5px system-ui">Changelog</button>
     </div>
     <div style="display:flex;gap:14px">
@@ -1639,11 +1680,20 @@ async function showAbout() {
     try { asBox.checked ? await autostartEnable() : await autostartDisable(); }
     catch (e) { trace(`autostart toggle failed: ${e}`); asBox.checked = !asBox.checked; }
   };
-  card.querySelector('#ab-log').onclick = () => {
-    const b = card.querySelector('#ab-body');
-    if (b.style.display === 'none') { b.innerHTML = marked.parse(changelogRaw); b.style.display = 'block'; }
-    else b.style.display = 'none';
+  // Two panels share the one body area: Features (what you can do) and
+  // Changelog (what changed). Clicking a button shows its panel, or hides it if
+  // already showing. Features exists so nothing has to be discovered by accident.
+  const body = card.querySelector('#ab-body');
+  let shown = null;
+  const togglePanel = (which, html) => {
+    if (shown === which) { body.style.display = 'none'; shown = null; return; }
+    body.innerHTML = html;
+    body.style.display = 'block';
+    body.scrollTop = 0;
+    shown = which;
   };
+  card.querySelector('#ab-feat').onclick = () => togglePanel('feat', marked.parse(FEATURES_MD));
+  card.querySelector('#ab-log').onclick = () => togglePanel('log', marked.parse(changelogRaw));
   wrap.onclick = (e) => { if (e.target === wrap) wrap.remove(); };
   window.addEventListener('keydown', function onKey(e) {
     if (e.key === 'Escape') { wrap.remove(); window.removeEventListener('keydown', onKey); }
