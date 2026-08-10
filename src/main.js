@@ -1646,42 +1646,35 @@ boot();
 // stumble onto a feature. Rendered in the About card's Features panel. Keep it
 // in step with the changelog when a user-facing feature lands.
 const FEATURES_MD = `
-**Sessions**
-- Each tab is a Claude Code session in a folder. Open as many as you like.
-- Close the app and reopen it: your tabs come back and each Claude conversation resumes.
-- The tab dot tells you each session's state at a glance: **blue** working, **amber** done, **red** waiting on you (a permission or a question).
+Short list of everything. For detail see the [GitHub README](https://github.com/saitaskar/crydeck#readme).
 
-**First run, from zero**
-- On a fresh PC, one click installs PowerShell 7, Git, and Claude Code, then logs you in. Nothing to set up by hand.
+**Sessions & setup**
+- Each tab is a Claude Code session in a folder; close and reopen and conversations resume.
+- Fresh PC: first run installs PowerShell 7, Git, and Claude Code, then logs you in.
+- Up to 6 sessions, plus up to 3 extra plain terminals under each.
+- Starts with Windows (toggle above) and auto-updates itself.
 
-**From your phone (Remote Control)**
-- Start a session with Claude's Remote Control and steer it from your phone or the web.
-- Tell a session to spawn another (see the crydeck CLI below), so you can open new work from your phone too.
+**Know what each session is doing**
+- Tab dot: blue working, amber done, red waiting on you, none idle.
+- Desktop notification when a background session finishes or needs you.
+- Status bar: model, effort, context %, rate limits, session cost.
+- Auto-continue after a rate limit: right-click a tab to schedule it.
 
-**Drive one session from another — the \`crydeck\` CLI**
-- \`crydeck spawn <folder> [prompt]\` — open a new session, optionally with its first message.
-- \`crydeck list\` — list your open sessions and their ids.
-- \`crydeck read <id> [lines]\` — read another session's recent output.
-- \`crydeck send <id> <text>\` — send a message into another session.
-- Any session can run these (ask Claude to), so one session can orchestrate the rest.
+**The file tree & preview**
+- Live tree; Claude's edits glow amber, turn green once seen, blue dot = uncommitted git change.
+- File view: code, rendered markdown, images, with a Content|Diff switch.
+- HTML files render as a page automatically; the App pane runs your dev server's localhost.
+- Feed: everything Claude produced. Review: edits grouped under the prompt that caused them.
+- Point at the running app: click an element (🎯) or draw annotations (✏️) and send them to Claude.
 
-**Keyboard shortcuts**
-- **Ctrl+Shift+P** — find a file (fuzzy); inserts \`@path\` into the session.
-- **Ctrl+Shift+F** — search across files; inserts \`@file\`.
-- **Ctrl+Shift+E** — open the folder in VS Code.
-- **Ctrl+Shift+K** — your saved prompts; pick one to type it in.
+**Remote & orchestration**
+- Remote Control: steer any session from your phone or the web.
+- \`crydeck\` CLI on every session: \`spawn <folder> [prompt]\`, \`list\`, \`read <id>\`, \`send <id> <text>\` — so a session can open and drive others (and you can spawn new work from your phone).
 
-**While you work**
-- Desktop notification when a background session goes quiet, so you can look away.
-- File tree on the left; a preview pane on the right (File / running App / Feed).
-- Select an HTML file and it renders as a page automatically (toggle in the About card); the code view is one tab away, and **Render ↗** re-renders on demand.
-- To view your project running: start its dev server in the session (e.g. \`npm run dev\`); when it prints a localhost URL, the App pane loads it automatically. You can also type any localhost URL into the App pane's address bar.
-- Built-in diff view and git change marks.
-- Up to three extra plain terminals under each session.
+**Shortcuts & OS**
+- Ctrl+Shift+P find file · Ctrl+Shift+F search in files · Ctrl+Shift+E open in VS Code · Ctrl+Shift+K prompts.
+- Double-click opens a file in its default app; right-click a folder to open it as a session.
 - Copy with Ctrl+C on a selection, paste with Ctrl+V or right-click.
-
-**Housekeeping**
-- Start CryDeck with Windows (toggle above), and one-click auto-update from GitHub.
 `;
 
 // Minimal about card: version, links, changelog. Links open in the default
@@ -1693,18 +1686,30 @@ async function showAbout() {
   const link = (label, url) =>
     `<a href="#" data-url="${url}" style="color:#7aa2ff;text-decoration:none">${label}</a>`;
   const card = document.createElement('div');
-  card.style.cssText = 'background:#17171c;border:1px solid #2a2a32;border-radius:8px;padding:16px 20px;width:340px;color:#d8d8de;font:12.5px system-ui;box-shadow:0 8px 30px rgba(0,0,0,.5)';
+  card.style.cssText = 'background:#17171c;border:1px solid #2a2a32;border-radius:8px;padding:18px 22px;width:480px;max-width:94vw;color:#d8d8de;font:12.5px system-ui;box-shadow:0 8px 30px rgba(0,0,0,.5)';
+  const hi = (t) => `<li style="margin:2px 0">${t}</li>`;
   card.innerHTML = `
     <div style="display:flex;align-items:baseline;gap:8px;margin-bottom:10px">
       <b style="font-size:14px">CryDeck</b><span style="color:#8a8a94">v${esc(ver)}</span>
       <span style="flex:1"></span>
-      <button id="ab-feat" style="background:#22222a;border:1px solid #3a3a44;border-radius:5px;color:#ccc;padding:3px 9px;cursor:pointer;font:11.5px system-ui">Features</button>
+      <button id="ab-feat" style="background:#22222a;border:1px solid #3a3a44;border-radius:5px;color:#ccc;padding:3px 9px;cursor:pointer;font:11.5px system-ui">All features</button>
       <button id="ab-log" style="background:#22222a;border:1px solid #3a3a44;border-radius:5px;color:#ccc;padding:3px 9px;cursor:pointer;font:11.5px system-ui">Changelog</button>
     </div>
-    <div style="display:flex;gap:14px">
-      ${link('GitHub', 'https://github.com/saitaskar/crydeck')}
+    <div style="display:flex;gap:14px;flex-wrap:wrap">
+      ${link('GitHub &amp; docs', 'https://github.com/saitaskar/crydeck#readme')}
       ${link('cryme.tr', 'https://cryme.tr')}
       ${link('☕ Buy me a coffee', 'https://cryme.tr/support')}
+    </div>
+    <div style="margin-top:14px;border-top:1px solid #2a2a32;padding-top:12px">
+      <b style="color:#aab;font-size:12px">What you get</b>
+      <ul style="margin:6px 0 0;padding-left:18px;line-height:1.55;color:#c7c7cf">
+        ${hi('A tab is a Claude Code session; close and reopen and your conversations come back.')}
+        ${hi('Fresh PC? First run installs PowerShell 7, Git, and Claude Code for you.')}
+        ${hi('The tab dot shows each session at a glance: blue working, amber done, red waiting on you.')}
+        ${hi('Live file tree + a preview pane that runs your app and renders HTML.')}
+        ${hi('Steer sessions from your phone, and open new ones with the built-in <code>crydeck</code> command.')}
+      </ul>
+      <div style="margin-top:8px;font-size:11.5px;color:#8a8a94">Full list below, or the ${link('GitHub README', 'https://github.com/saitaskar/crydeck#readme')} for detail.</div>
     </div>
     <label id="ab-autostart-row" style="display:flex;align-items:center;gap:8px;margin-top:12px;cursor:pointer">
       <input type="checkbox" id="ab-autostart" style="cursor:pointer">
@@ -1743,6 +1748,12 @@ async function showAbout() {
   const togglePanel = (which, html) => {
     if (shown === which) { body.style.display = 'none'; shown = null; return; }
     body.innerHTML = html;
+    // Markdown links in the panel must open in the real browser, not navigate
+    // the app window.
+    for (const a of body.querySelectorAll('a[href]')) {
+      const url = a.getAttribute('href');
+      a.onclick = (e) => { e.preventDefault(); invoke('os_open', { path: url }); };
+    }
     body.style.display = 'block';
     body.scrollTop = 0;
     shown = which;

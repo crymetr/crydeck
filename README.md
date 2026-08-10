@@ -45,11 +45,32 @@ is the entire reason it stays light (~250MB working set, single small binary).
 
 ## What it does
 
+- **Zero-setup on a fresh PC.** First launch installs PowerShell 7, Git, and
+  Claude Code for you (winget or direct installers, run visibly in a tab) and
+  flows into Claude's login. On a machine that already has them, you see none
+  of it.
 - **Tabs are sessions.** One working directory + one Claude Code process per
   tab (cap 6), restored on relaunch **with their conversations** (via
   `--continue`). Sessions launch with Remote Control on, so your phone can
-  pick any of them up. Background tabs show a blue pulse while their Claude
-  works and an amber dot when it finishes or needs you.
+  pick any of them up. The tab dot is a four-state badge: **blue** working,
+  **amber** done, **red** waiting on you (a permission or a question), or none
+  when idle.
+- **Orchestration — drive sessions from a session.** A `crydeck` CLI on every
+  session's PATH: `crydeck spawn <folder> [prompt]` opens a new session (and
+  can seed its first message — this is how you open new work from your phone),
+  `crydeck list` lists them, `crydeck read <id>` reads another session's recent
+  output, `crydeck send <id> <text>` messages it. It's the Windows-native
+  stand-in for Claude Code's cross-session messaging, over a loopback-only,
+  token-authed gateway. See ROADMAP.md.
+- **Keyboard palettes.** Ctrl+Shift+P fuzzy file finder, Ctrl+Shift+F search
+  in files (git grep), Ctrl+Shift+E open the folder in VS Code, Ctrl+Shift+K a
+  saved-prompt library. The finders insert `@path` into the session so you can
+  reference files to Claude. Ctrl+Shift+* on purpose, so shell readline keys
+  stay untouched.
+- **Desktop notifications.** When a background session goes quiet or rings for
+  you, CryDeck raises a notification, so you can look away and get pulled back.
+- **Start with Windows** (on by default, toggle in the About card) and one-click
+  signed auto-update from GitHub Releases.
 - **The tree is live and knows what Claude touched.** Files Claude edits glow
   amber; open one and it turns green (seen); a re-edit flips it back; blue
   dots mark uncommitted git changes. Powered by Claude Code's own hook
@@ -60,7 +81,10 @@ is the entire reason it stays light (~250MB working set, single small binary).
   markdown, images) with a **Content|Diff switch**; files Claude just changed
   default to the diff. *App*: a real embedded webview with page tabs; the
   first dev server the session starts loads automatically and stays alive
-  across tab switches. *Feed*: everything Claude produced, newest first. *Review*: a supervision queue grouping edits under the prompt that caused them, with unreviewed counts and per-task sign-off.
+  across tab switches; selecting an HTML file renders it as a page (file://,
+  auto by default, toggleable). *Feed*: everything Claude produced, newest
+  first. *Review*: a supervision queue grouping edits under the prompt that
+  caused them, with unreviewed counts and per-task sign-off.
 - **Point at things, literally.** Element select (🎯): click any element in
   the running app and its selector, text and position are typed into Claude's
   prompt. Annotations (✏️): draw numbered boxes on the page, hit Send, and

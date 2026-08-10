@@ -3,6 +3,11 @@
 All notable changes to CryDeck. Format loosely follows Keep a Changelog;
 versions are git tags.
 
+## v0.13.2 - 2026-08-10
+
+### Changed
+- **About card overhaul.** Wider and easier to read. A "What you get" highlights box is now visible up front, the "All features" panel lists everything CryDeck does in short lines (previously incomplete), and there's a link to the GitHub README for the full guide. The README's feature list is brought up to date too (orchestration CLI, shortcuts, notifications, four-state badge, HTML render, zero-setup).
+
 ## v0.13.1 - 2026-08-10
 
 ### Changed
