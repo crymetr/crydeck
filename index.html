@@ -96,9 +96,14 @@
   .pv-view { position: absolute; inset: 0; display: none; overflow: auto; }
   .pv-view.on { display: flex; flex-direction: column; }
   #pv-file { user-select: text; }
-  #pv-file .path { padding: 4px 8px; color: var(--dim); border-bottom: 1px solid var(--line);
-    white-space: nowrap; overflow: hidden; text-overflow: ellipsis; direction: rtl;
-    text-align: left; flex: 0 0 auto; }
+  #pv-file .path { display: flex; align-items: center; gap: 8px; padding: 4px 8px;
+    color: var(--dim); border-bottom: 1px solid var(--line); flex: 0 0 auto; }
+  #pv-file .path .p { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden;
+    text-overflow: ellipsis; direction: rtl; text-align: left; }
+  #pv-file .renderbtn { flex: 0 0 auto; font: 11px system-ui; padding: 2px 9px;
+    background: var(--bg3); border: 1px solid var(--line); border-radius: 4px;
+    color: var(--fg); cursor: pointer; }
+  #pv-file .renderbtn:hover { border-color: var(--accent); }
   #pv-file .content { flex: 1; overflow: auto; }
   #pv-file .viewsel { display: flex; gap: 2px; padding: 4px 6px; flex: 0 0 auto;
     border-bottom: 1px solid var(--line); }

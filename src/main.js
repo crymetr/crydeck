@@ -26,6 +26,10 @@ window.addEventListener('unhandledrejection', (e) =>
 
 const $ = (id) => document.getElementById(id);
 const norm = (p) => p.replace(/\//g, '\\').replace(/\\+$/, '').toLowerCase();
+// Windows path -> file:// URL the preview webview can load (C:\a b\i.html ->
+// file:///C:/a%20b/i.html). Relative assets resolve against it, so a static
+// page renders like a browser without any server.
+const fileUrl = (p) => 'file:///' + encodeURI(p.replace(/\\/g, '/'));
 const basename = (p) => p.replace(/[\\/]+$/, '').split(/[\\/]/).pop() || p;
 const esc = (s) => s.replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 
@@ -667,7 +671,7 @@ function showFile(s, path) {
 
 async function renderFile(s) {
   const pane = $('pv-file');
-  pane.innerHTML = `<div class="path">${esc(s.pvFile)}</div><div class="content"><div class="note">loading…</div></div>`;
+  pane.innerHTML = `<div class="path"><span class="p">${esc(s.pvFile)}</span></div><div class="content"><div class="note">loading…</div></div>`;
   // Content renders the moment it's read; the diff is decoration that attaches
   // when git answers. Blocking the viewer on a subprocess felt broken.
   const file = s.pvFile;
@@ -707,6 +711,16 @@ async function renderFile(s) {
     }
   }
   const content = pane.querySelector('.content');
+  // HTML files get a Render button in the header: it loads the file itself
+  // (file://) into the App preview, so you see the rendered page, not the code.
+  if (/\.html?$/i.test(file)) {
+    const btn = document.createElement('button');
+    btn.className = 'renderbtn';
+    btn.textContent = 'Render ↗';
+    btn.title = 'Show this page rendered in the App preview';
+    btn.onclick = () => loadApp(s, fileUrl(file));
+    pane.querySelector('.path').appendChild(btn);
+  }
   if (c.kind === 'text') {
     const isMd = /\.(md|markdown)$/i.test(s.pvFile);
     if (isMd) {
@@ -794,7 +808,7 @@ function setModeButtons(s) {
 }
 
 function loadApp(s, url) {
-  if (!/^https?:\/\//i.test(url)) url = 'http://' + url;
+  if (!/^(https?|file):\/\//i.test(url)) url = 'http://' + url;
   const i = s.pages.findIndex((p) => p.url.toLowerCase() === url.toLowerCase());
   s.pageIdx = i >= 0 ? i : s.pages.push({ url }) - 1;
   if (s === active) setPvMode('app', true);
@@ -1637,6 +1651,8 @@ const FEATURES_MD = `
 **While you work**
 - Desktop notification when a background session goes quiet, so you can look away.
 - File tree on the left; a preview pane on the right (File / running App / Feed).
+- Selected an HTML file? Hit **Render ↗** to see the page itself, not its code.
+- To view your project running: start its dev server in the session (e.g. \`npm run dev\`); when it prints a localhost URL, the App pane loads it automatically. You can also type any localhost URL into the App pane's address bar.
 - Built-in diff view and git change marks.
 - Up to three extra plain terminals under each session.
 - Copy with Ctrl+C on a selection, paste with Ctrl+V or right-click.

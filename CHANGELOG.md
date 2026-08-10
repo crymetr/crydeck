@@ -3,6 +3,11 @@
 All notable changes to CryDeck. Format loosely follows Keep a Changelog;
 versions are git tags.
 
+## v0.13.0 - 2026-08-10
+
+### Added
+- **Render an HTML file.** Selecting an .html/.htm file in the tree now shows a **Render ↗** button in the preview header; it loads the file itself (file://) into the App pane so you see the rendered page, with relative CSS/JS/images resolving, no server needed. The code view is still there. To view a whole project, run its dev server in the session and the App pane picks up the localhost URL automatically.
+
 ## v0.12.0 - 2026-08-10
 
 ### Changed
