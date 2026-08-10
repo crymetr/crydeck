@@ -1708,6 +1708,7 @@ async function showAbout() {
         ${hi('The tab dot shows each session at a glance: blue working, amber done, red waiting on you.')}
         ${hi('Live file tree + a preview pane that runs your app and renders HTML.')}
         ${hi('Steer sessions from your phone, and open new ones with the built-in <code>crydeck</code> command.')}
+        ${hi('Hit a rate limit? Right-click a tab to auto-continue right after it resets.')}
       </ul>
       <div style="margin-top:8px;font-size:11.5px;color:#8a8a94">Full list below, or the ${link('GitHub README', 'https://github.com/saitaskar/crydeck#readme')} for detail.</div>
     </div>

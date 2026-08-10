@@ -3,6 +3,11 @@
 All notable changes to CryDeck. Format loosely follows Keep a Changelog;
 versions are git tags.
 
+## v0.13.3 - 2026-08-10
+
+### Changed
+- Added auto-continue-after-rate-limit to the About card's "What you get" highlights (it was already in the full features list).
+
 ## v0.13.2 - 2026-08-10
 
 ### Changed
