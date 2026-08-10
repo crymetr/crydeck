@@ -3,6 +3,11 @@
 All notable changes to CryDeck. Format loosely follows Keep a Changelog;
 versions are git tags.
 
+## v0.13.1 - 2026-08-10
+
+### Changed
+- **HTML files now render automatically when selected** — no need to click Render each time. Clicking through several HTML files reuses one preview slot instead of stacking a tab per file. There's a toggle in the About card to turn auto-render off, and Render ↗ still re-renders on demand.
+
 ## v0.13.0 - 2026-08-10
 
 ### Added

@@ -656,6 +656,11 @@ function diffHtml(d) {
   }).join('\n');
 }
 
+// Auto-render HTML: selecting an .html file shows the rendered page straight
+// away, no Render click. On by default; toggle in the About card. Stored as
+// '0' when off.
+let autoRenderHtml = localStorage.getItem('cockpit.autorender') !== '0';
+
 function showFile(s, path) {
   s.pvFile = path;
   s.pvView = null; // re-decide content-vs-diff per file
@@ -666,7 +671,25 @@ function showFile(s, path) {
     s.tree.recomputeMarks();
     reviewChanged(s);
   }
-  if (s === active) { setPvMode('file', true); }
+  if (s === active) {
+    if (autoRenderHtml && /\.html?$/i.test(path)) renderHtmlFile(s, path);
+    else setPvMode('file', true);
+  }
+}
+
+// Load an HTML file rendered into the App pane. Reuses one file:// page slot
+// instead of stacking a new tab for every HTML file you click.
+function renderHtmlFile(s, path) {
+  const url = fileUrl(path);
+  const exact = s.pages.findIndex((p) => p.url.toLowerCase() === url.toLowerCase());
+  if (exact >= 0) {
+    s.pageIdx = exact;
+  } else {
+    const fileIdx = s.pages.findIndex((p) => /^file:\/\//i.test(p.url));
+    if (fileIdx >= 0) { s.pages[fileIdx] = { url }; s.pageIdx = fileIdx; }
+    else { s.pageIdx = s.pages.push({ url }) - 1; }
+  }
+  if (s === active) setPvMode('app', true);
 }
 
 async function renderFile(s) {
@@ -718,7 +741,7 @@ async function renderFile(s) {
     btn.className = 'renderbtn';
     btn.textContent = 'Render ↗';
     btn.title = 'Show this page rendered in the App preview';
-    btn.onclick = () => loadApp(s, fileUrl(file));
+    btn.onclick = () => renderHtmlFile(s, file);
     pane.querySelector('.path').appendChild(btn);
   }
   if (c.kind === 'text') {
@@ -1651,7 +1674,7 @@ const FEATURES_MD = `
 **While you work**
 - Desktop notification when a background session goes quiet, so you can look away.
 - File tree on the left; a preview pane on the right (File / running App / Feed).
-- Selected an HTML file? Hit **Render ↗** to see the page itself, not its code.
+- Select an HTML file and it renders as a page automatically (toggle in the About card); the code view is one tab away, and **Render ↗** re-renders on demand.
 - To view your project running: start its dev server in the session (e.g. \`npm run dev\`); when it prints a localhost URL, the App pane loads it automatically. You can also type any localhost URL into the App pane's address bar.
 - Built-in diff view and git change marks.
 - Up to three extra plain terminals under each session.
@@ -1687,6 +1710,10 @@ async function showAbout() {
       <input type="checkbox" id="ab-autostart" style="cursor:pointer">
       <span>Start CryDeck when Windows starts</span>
     </label>
+    <label style="display:flex;align-items:center;gap:8px;margin-top:8px;cursor:pointer">
+      <input type="checkbox" id="ab-autorender" style="cursor:pointer">
+      <span>Render HTML files automatically when selected</span>
+    </label>
     <div style="margin-top:12px;font-size:11.5px;color:#8a8a94;line-height:1.7">
       <b style="color:#aab">Shortcuts</b><br>
       Ctrl+Shift+P find file &nbsp;·&nbsp; Ctrl+Shift+F search in files<br>
@@ -1701,6 +1728,12 @@ async function showAbout() {
   asBox.onchange = async () => {
     try { asBox.checked ? await autostartEnable() : await autostartDisable(); }
     catch (e) { trace(`autostart toggle failed: ${e}`); asBox.checked = !asBox.checked; }
+  };
+  const arBox = card.querySelector('#ab-autorender');
+  arBox.checked = autoRenderHtml;
+  arBox.onchange = () => {
+    autoRenderHtml = arBox.checked;
+    localStorage.setItem('cockpit.autorender', autoRenderHtml ? '1' : '0');
   };
   // Two panels share the one body area: Features (what you can do) and
   // Changelog (what changed). Clicking a button shows its panel, or hides it if
