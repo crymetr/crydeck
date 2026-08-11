@@ -372,6 +372,168 @@ pub fn prompts_save(json: String) -> Result<(), String> {
     std::fs::write(prompts_file(), json).map_err(|e| e.to_string())
 }
 
+/// Explorer-copied files on the clipboard (CF_HDROP), so Ctrl+V in a terminal
+/// can paste their paths instead of nothing. Empty when the clipboard holds
+/// text or an image.
+#[tauri::command]
+pub fn clip_paths() -> Vec<String> {
+    clipboard_win::get_clipboard::<Vec<String>, _>(clipboard_win::formats::FileList)
+        .unwrap_or_default()
+}
+
+/// A pasted clipboard image lands here as a real file so the path can be typed
+/// into the session and Claude can read it.
+#[tauri::command]
+pub fn save_paste(name: String, b64: String) -> Result<String, String> {
+    let dir = crydeck_dir().join("pastes");
+    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    let safe: String = name
+        .chars()
+        .map(|c| if "\\/:*?\"<>|".contains(c) { '_' } else { c })
+        .collect();
+    let stamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis())
+        .unwrap_or(0);
+    let path = dir.join(format!("{stamp}-{safe}"));
+    std::fs::write(&path, base64_decode(&b64)?).map_err(|e| e.to_string())?;
+    Ok(path.to_string_lossy().into_owned())
+}
+
+fn base64_decode(s: &str) -> Result<Vec<u8>, String> {
+    let val = |c: u8| -> Result<u32, String> {
+        match c {
+            b'A'..=b'Z' => Ok((c - b'A') as u32),
+            b'a'..=b'z' => Ok((c - b'a' + 26) as u32),
+            b'0'..=b'9' => Ok((c - b'0' + 52) as u32),
+            b'+' => Ok(62),
+            b'/' => Ok(63),
+            _ => Err("bad base64".into()),
+        }
+    };
+    let bytes: Vec<u8> = s.bytes().filter(|&b| b != b'=' && b != b'\n' && b != b'\r').collect();
+    let mut out = Vec::with_capacity(bytes.len() * 3 / 4);
+    for chunk in bytes.chunks(4) {
+        let mut n = 0u32;
+        for (i, &c) in chunk.iter().enumerate() {
+            n |= val(c)? << (18 - 6 * i);
+        }
+        out.push((n >> 16) as u8);
+        if chunk.len() > 2 {
+            out.push((n >> 8) as u8);
+        }
+        if chunk.len() > 3 {
+            out.push(n as u8);
+        }
+    }
+    Ok(out)
+}
+
+#[derive(Serialize)]
+pub struct CodeBlock {
+    lang: String,
+    code: String,
+}
+
+/// Fenced code blocks from the newest Claude Code transcript for this cwd,
+/// newest first — feeds the one-click-copy Code pane. Claude Code writes each
+/// session to ~\.claude\projects\<encoded-cwd>\<session>.jsonl as it goes, so
+/// this is the same text the terminal shows, without scraping the terminal.
+#[tauri::command]
+pub fn code_blocks(cwd: String) -> Vec<CodeBlock> {
+    let home = std::env::var("USERPROFILE").unwrap_or_else(|_| "C:\\".into());
+    // Claude Code's project-dir encoding: every non-alphanumeric char -> '-'.
+    let enc: String = cwd
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
+        .collect();
+    let dir = PathBuf::from(home).join(".claude").join("projects").join(enc);
+
+    let mut best: Option<(std::time::SystemTime, PathBuf)> = None;
+    if let Ok(rd) = std::fs::read_dir(&dir) {
+        for e in rd.flatten() {
+            let p = e.path();
+            if p.extension().map(|x| x == "jsonl").unwrap_or(false) {
+                if let Some(t) = e.metadata().ok().and_then(|m| m.modified().ok()) {
+                    if best.as_ref().map(|(bt, _)| t > *bt).unwrap_or(true) {
+                        best = Some((t, p));
+                    }
+                }
+            }
+        }
+    }
+    let Some((_, path)) = best else { return Vec::new() };
+
+    // Transcripts grow to tens of MB; only the tail matters for "recent blocks".
+    let text = match read_tail(&path, 2 * 1_048_576) {
+        Ok(t) => t,
+        Err(_) => return Vec::new(),
+    };
+    let mut out = Vec::new();
+    for line in text.lines() {
+        let Ok(v) = serde_json::from_str::<serde_json::Value>(line) else { continue };
+        if v.get("type").and_then(|t| t.as_str()) != Some("assistant") {
+            continue;
+        }
+        let Some(content) = v.pointer("/message/content").and_then(|c| c.as_array()) else {
+            continue;
+        };
+        for item in content {
+            if item.get("type").and_then(|t| t.as_str()) != Some("text") {
+                continue;
+            }
+            if let Some(text) = item.get("text").and_then(|t| t.as_str()) {
+                extract_fences(text, &mut out);
+            }
+        }
+    }
+    let n = out.len();
+    if n > 30 {
+        out.drain(0..n - 30);
+    }
+    out.reverse();
+    out
+}
+
+fn extract_fences(text: &str, out: &mut Vec<CodeBlock>) {
+    let mut lines = text.lines();
+    while let Some(l) = lines.next() {
+        let t = l.trim_start();
+        if let Some(rest) = t.strip_prefix("```") {
+            let lang = rest.trim().to_string();
+            let mut code = String::new();
+            for l2 in lines.by_ref() {
+                if l2.trim_start().starts_with("```") {
+                    break;
+                }
+                code.push_str(l2);
+                code.push('\n');
+            }
+            if !code.trim().is_empty() {
+                out.push(CodeBlock { lang, code });
+            }
+        }
+    }
+}
+
+/// Last `n` bytes of a file as UTF-8, starting from the first complete line.
+fn read_tail(p: &Path, n: u64) -> Result<String, String> {
+    use std::io::{Read, Seek, SeekFrom};
+    let mut f = std::fs::File::open(p).map_err(|e| e.to_string())?;
+    let len = f.metadata().map_err(|e| e.to_string())?.len();
+    let start = len.saturating_sub(n);
+    f.seek(SeekFrom::Start(start)).map_err(|e| e.to_string())?;
+    let mut buf = Vec::new();
+    f.read_to_end(&mut buf).map_err(|e| e.to_string())?;
+    let mut s = String::from_utf8_lossy(&buf).into_owned();
+    if start > 0 {
+        if let Some(i) = s.find('\n') {
+            s.drain(..=i);
+        }
+    }
+    Ok(s)
+}
+
 /// `cockpit <folder>` opens a session there on boot. Also what the smoke test
 /// drives, since a headless run cannot click the folder picker.
 #[tauri::command]

@@ -47,7 +47,10 @@ function wireClipboard(term, box) {
   term.attachCustomKeyEventHandler((ev) => {
     if (ev.type !== 'keydown' || !ev.ctrlKey) return true;
     if (ev.code === 'KeyV') {
-      navigator.clipboard.readText().then((t) => t && term.paste(t));
+      // preventDefault matters: without it the browser ALSO delivers a native
+      // paste to xterm's textarea and the text lands twice.
+      ev.preventDefault();
+      smartPaste(term);
       return false;
     }
     if (ev.code === 'KeyC') {
@@ -60,8 +63,36 @@ function wireClipboard(term, box) {
   box.addEventListener('contextmenu', (ev) => {
     ev.preventDefault();
     ev.stopPropagation();
-    navigator.clipboard.readText().then((t) => t && term.paste(t));
+    smartPaste(term);
   });
+}
+
+// Paste whatever the clipboard actually holds: Explorer-copied files paste as
+// their paths, a copied image (screenshot) is saved under ~\.crydeck\pastes and
+// its path pasted so Claude can read it, plain text pastes as text.
+const quotePath = (p) => (p.includes(' ') ? `"${p}"` : p);
+async function smartPaste(term) {
+  const paths = await invoke('clip_paths').catch(() => []);
+  if (paths.length) { term.paste(paths.map(quotePath).join(' ') + ' '); return; }
+  try {
+    for (const item of await navigator.clipboard.read()) {
+      const type = item.types.find((t) => t.startsWith('image/'));
+      if (!type) continue;
+      const blob = await item.getType(type);
+      const b64 = await new Promise((res, rej) => {
+        const r = new FileReader();
+        r.onload = () => res(r.result.split(',')[1]);
+        r.onerror = rej;
+        r.readAsDataURL(blob);
+      });
+      const ext = type.split('/')[1].replace('jpeg', 'jpg').replace('svg+xml', 'svg');
+      const path = await invoke('save_paste', { name: `paste.${ext}`, b64 });
+      term.paste(quotePath(path) + ' ');
+      return;
+    }
+  } catch {}
+  const t = await navigator.clipboard.readText().catch(() => '');
+  if (t) term.paste(t);
 }
 
 // First-run prerequisite installer, emitted as a single PowerShell line typed
@@ -641,7 +672,40 @@ function setPvMode(mode, force = false) {
   if (mode === 'app') renderApp(active);
   if (mode === 'feed') renderFeed(active);
   if (mode === 'review') renderReview(active);
+  if (mode === 'code') renderCode(active);
 }
+
+// One-click copy for code blocks, fed by the session transcript (the JSONL
+// Claude Code writes as it goes) instead of scraping the terminal. Newest
+// first. Light polling while the pane is visible; re-render only on change so
+// scroll position and "Copied" feedback survive.
+async function renderCode(s) {
+  const list = document.querySelector('#pv-code .list');
+  const blocks = await invoke('code_blocks', { cwd: s.cwd }).catch(() => []);
+  if (s !== active || s.pvMode !== 'code') return;
+  const key = s.ptyId + '|' + blocks.map((b) => b.lang + b.code.length).join('|');
+  if (renderCode.domKey === key) return;
+  renderCode.domKey = key;
+  list.innerHTML = '';
+  if (!blocks.length) {
+    list.innerHTML = '<div class="feed-empty">No code blocks in this session\'s replies yet. When Claude answers with code, it shows up here with a copy button.</div>';
+    return;
+  }
+  for (const b of blocks) {
+    const el = document.createElement('div');
+    el.className = 'codeblock';
+    el.innerHTML = `<div class="cbhdr"><span>${esc(b.lang || 'text')}</span><button>⧉ Copy</button></div><pre></pre>`;
+    el.querySelector('pre').textContent = b.code.length > 6000 ? b.code.slice(0, 6000) + '\n…' : b.code;
+    const btn = el.querySelector('button');
+    btn.onclick = () => {
+      navigator.clipboard.writeText(b.code);
+      btn.textContent = '✓ Copied';
+      setTimeout(() => { btn.textContent = '⧉ Copy'; }, 1200);
+    };
+    list.append(el);
+  }
+}
+setInterval(() => { if (active && active.pvMode === 'code') renderCode(active); }, 4000);
 for (const b of document.querySelectorAll('#pv-modes button'))
   b.onclick = () => setPvMode(b.dataset.mode);
 
@@ -1784,6 +1848,8 @@ Short list of everything. For detail see the [GitHub README](https://github.com/
 - Ctrl+Shift+P find file · Ctrl+Shift+F search in files · Ctrl+Shift+E open in VS Code · Ctrl+Shift+K prompts.
 - Double-click opens a file in its default app; right-click a folder to open it as a session.
 - Copy with Ctrl+C on a selection, paste with Ctrl+V or right-click.
+- Paste is clipboard-aware: a copied screenshot or Explorer-copied file pastes as a path Claude can read.
+- Code pane (next to Review/Feed): every code block Claude replies with, newest first, one-click copy.
 `;
 
 // Minimal about card: version, links, changelog. Links open in the default

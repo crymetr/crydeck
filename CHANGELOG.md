@@ -3,6 +3,15 @@
 All notable changes to CryDeck. Format loosely follows Keep a Changelog;
 versions are git tags.
 
+## v0.15.0 - 2026-08-11
+
+### Added
+- **Code pane**: a new tab next to Review/Feed listing every code block from Claude's replies (read from the session transcript, not scraped from the terminal), newest first, each with a one-click Copy button.
+- **Clipboard-aware paste**: Ctrl+V (or right-click) with a screenshot on the clipboard saves it under `~\.crydeck\pastes` and pastes the file path for Claude to read; files copied in Explorer paste as their paths; plain text pastes as before.
+
+### Fixed
+- **Double paste.** Ctrl+V used to paste twice: the manual clipboard insert and the browser's native paste both fired. Now only one does.
+
 ## v0.14.0 - 2026-08-11
 
 ### Added

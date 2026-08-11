@@ -192,6 +192,15 @@
     border-radius: 3px; cursor: pointer; font-size: 10.5px; padding: 1px 6px; }
   .feed-item .open:hover { color: var(--fg); }
   .feed-empty { padding: 16px; color: var(--dim); text-align: center; }
+  #pv-code .list { flex: 1; overflow: auto; padding: 4px; }
+  .codeblock { border: 1px solid var(--line); border-radius: 5px; margin: 4px; overflow: hidden; }
+  .codeblock .cbhdr { display: flex; justify-content: space-between; align-items: center;
+    padding: 3px 8px; background: var(--bg3); color: var(--dim); font-size: 11px; }
+  .codeblock .cbhdr button { background: none; border: 1px solid var(--line); border-radius: 4px;
+    color: var(--dim); cursor: pointer; font-size: 10.5px; padding: 1px 7px; }
+  .codeblock .cbhdr button:hover { color: var(--fg); border-color: var(--accent); }
+  .codeblock pre { margin: 0; padding: 8px; font: 11.5px/1.5 "Cascadia Mono", Consolas, monospace;
+    overflow: auto; max-height: 260px; user-select: text; }
   #rv-count:not(:empty) { background: var(--changed); color: #1a1508; border-radius: 8px;
     padding: 0 6px; font-size: 10px; font-weight: 600; margin-left: 3px; }
   #pv-review .list { flex: 1; overflow: auto; padding: 4px 0; }
@@ -252,6 +261,7 @@
       <button data-mode="file">File</button>
       <button data-mode="app">App</button>
       <button data-mode="review">Review <span id="rv-count"></span></button>
+      <button data-mode="code">Code</button>
       <button data-mode="feed">Feed</button>
       <button id="shellToggle" title="Terminals under the preview">⌨</button>
     </div>
@@ -273,6 +283,7 @@
         </div>
       </div>
       <div id="pv-feed" class="pv-view"><div class="list"></div></div>
+      <div id="pv-code" class="pv-view"><div class="list"></div></div>
       <div id="pv-review" class="pv-view"><div class="list"></div></div>
     </div>
     <div id="pv-shells">
