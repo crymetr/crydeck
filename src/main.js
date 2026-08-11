@@ -18,7 +18,7 @@ import { getVersion } from '@tauri-apps/api/app';
 import changelogRaw from '../CHANGELOG.md?raw';
 import '@xterm/xterm/css/xterm.css';
 
-const MAX_SESSIONS = 6;
+const MAX_SESSIONS = 10;
 const trace = (m) => { try { invoke('bench_report', { line: `[ui] ${m}` }); } catch {} };
 window.addEventListener('error', (e) => trace(`ERROR ${e.message} @ ${e.filename}:${e.lineno}`));
 window.addEventListener('unhandledrejection', (e) =>
@@ -1651,7 +1651,7 @@ Short list of everything. For detail see the [GitHub README](https://github.com/
 **Sessions & setup**
 - Each tab is a Claude Code session in a folder; close and reopen and conversations resume.
 - Fresh PC: first run installs PowerShell 7, Git, and Claude Code, then logs you in.
-- Up to 6 sessions, plus up to 3 extra plain terminals under each.
+- Up to 10 sessions, plus up to 3 extra plain terminals under each.
 - Starts with Windows (toggle above) and auto-updates itself.
 
 **Know what each session is doing**

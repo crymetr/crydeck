@@ -3,6 +3,11 @@
 All notable changes to CryDeck. Format loosely follows Keep a Changelog;
 versions are git tags.
 
+## v0.13.4 - 2026-08-11
+
+### Changed
+- Session cap raised from 6 to 10.
+
 ## v0.13.3 - 2026-08-10
 
 ### Changed
