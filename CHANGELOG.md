@@ -3,6 +3,11 @@
 All notable changes to CryDeck. Format loosely follows Keep a Changelog;
 versions are git tags.
 
+## v0.16.0 - 2026-08-11
+
+### Added
+- **PDF preview.** Selecting a PDF in the tree renders it in the App pane (WebView2's native viewer), same auto-render slot and toggle as HTML. Render ↗ works on PDFs too.
+
 ## v0.15.0 - 2026-08-11
 
 ### Added

@@ -736,7 +736,9 @@ function showFile(s, path) {
     reviewChanged(s);
   }
   if (s === active) {
-    if (autoRenderHtml && /\.html?$/i.test(path)) renderHtmlFile(s, path);
+    // PDFs ride the same slot: WebView2 has a native PDF viewer, so file://
+    // into the App pane just works.
+    if (autoRenderHtml && /\.(html?|pdf)$/i.test(path)) renderHtmlFile(s, path);
     else setPvMode('file', true);
   }
 }
@@ -800,7 +802,7 @@ async function renderFile(s) {
   const content = pane.querySelector('.content');
   // HTML files get a Render button in the header: it loads the file itself
   // (file://) into the App preview, so you see the rendered page, not the code.
-  if (/\.html?$/i.test(file)) {
+  if (/\.(html?|pdf)$/i.test(file)) {
     const btn = document.createElement('button');
     btn.className = 'renderbtn';
     btn.textContent = 'Render ↗';
@@ -1831,7 +1833,7 @@ Short list of everything. For detail see the [GitHub README](https://github.com/
 **The file tree & preview**
 - Live tree; Claude's edits glow amber, turn green once seen, blue dot = uncommitted git change.
 - File view: code, rendered markdown, images, with a Content|Diff switch.
-- HTML files render as a page automatically; the App pane runs your dev server's localhost.
+- HTML and PDF files render automatically; the App pane runs your dev server's localhost.
 - Feed: everything Claude produced. Review: edits grouped under the prompt that caused them.
 - Point at the running app: click an element (🎯) or draw annotations (✏️) and send them to Claude.
 
@@ -1893,7 +1895,7 @@ async function showAbout() {
     </label>
     <label style="display:flex;align-items:center;gap:8px;margin-top:8px;cursor:pointer">
       <input type="checkbox" id="ab-autorender" style="cursor:pointer">
-      <span>Render HTML files automatically when selected</span>
+      <span>Render HTML and PDF files automatically when selected</span>
     </label>
     <div style="margin-top:12px;font-size:11.5px;color:#8a8a94;line-height:1.7">
       <b style="color:#aab">Shortcuts</b><br>
