@@ -49,9 +49,10 @@
   #empty button { font: inherit; padding: 8px 18px; border-radius: 6px;
     border: 1px solid #35353f; background: var(--bg3); color: var(--fg); cursor: pointer; }
 
-  /* ---- tree ---- */
-  #tree { grid-area: tree; overflow: auto; background: var(--bg2);
-    border-right: 1px solid var(--line); padding: 4px 0; }
+  /* ---- left column: tree + prompt library ---- */
+  #left { grid-area: tree; display: flex; flex-direction: column; min-height: 0;
+    background: var(--bg2); border-right: 1px solid var(--line); }
+  #tree { flex: 1; min-height: 0; overflow: auto; padding: 4px 0; }
   #tree .hdr { display: flex; align-items: center; padding: 2px 8px 6px;
     color: var(--dim); }
   #tree .hdr .root { overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
@@ -73,6 +74,31 @@
   .node.seen > .row .label::after { content: " ●"; font-size: 8px; opacity: .55; }
   .node.git > .row .label::after { content: " ●"; font-size: 8px; color: #6f8fd0; opacity: .7; }
   .kids { padding-left: 14px; }
+
+  /* ---- prompt library (bottom of the left column) ---- */
+  #prompts { flex: 0 0 auto; border-top: 1px solid var(--line); display: flex;
+    flex-direction: column; max-height: 45%; min-height: 0; }
+  #prompts .phdr { display: flex; align-items: center; gap: 4px; padding: 4px 8px;
+    color: var(--dim); flex: 0 0 auto; cursor: pointer; }
+  #prompts .phdr .ptitle { flex: 1; font-weight: 600; font-size: 11px;
+    letter-spacing: .04em; text-transform: uppercase; }
+  #prompts .phdr button { background: none; border: none; color: var(--dim);
+    cursor: pointer; font-size: 13px; padding: 0 4px; }
+  #prompts .phdr button:hover { color: var(--fg); }
+  #prompts .plist { overflow: auto; min-height: 0; padding-bottom: 4px; }
+  #prompts.closed .plist { display: none; }
+  #prompts .prow { padding: 3px 8px 3px 12px; cursor: pointer; }
+  #prompts .prow .pname { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  #prompts .prow .pdesc { display: none; color: var(--dim); font-size: 11px;
+    white-space: normal; padding-top: 1px; }
+  #prompts .prow:hover { background: #24304a; }
+  #prompts .prow:hover .pdesc { display: block; }
+  #prompts .prow .pacts { display: none; float: right; gap: 2px; }
+  #prompts .prow:hover .pacts { display: inline-flex; }
+  #prompts .prow .pacts button { background: none; border: none; color: var(--dim);
+    cursor: pointer; font-size: 11px; padding: 0 3px; }
+  #prompts .prow .pacts button:hover { color: var(--fg); }
+  #prompts .pempty { padding: 8px 12px; color: var(--dim); font-size: 11px; }
 
   /* ---- terminal ---- */
   #termhost { grid-area: term; position: relative; min-width: 0; min-height: 0; }
@@ -207,7 +233,17 @@
 <body>
 <div id="app">
   <div id="tabs"></div>
-  <div id="tree"></div>
+  <div id="left">
+    <div id="tree"></div>
+    <div id="prompts">
+      <div class="phdr">
+        <span class="ptitle">Prompts</span>
+        <button id="pr-add" title="Save a new prompt">＋</button>
+        <button id="pr-fold" title="Collapse">▾</button>
+      </div>
+      <div class="plist"></div>
+    </div>
+  </div>
   <div id="s1" class="split"></div>
   <div id="termhost"></div>
   <div id="s2" class="split"></div>

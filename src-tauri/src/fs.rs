@@ -349,6 +349,29 @@ pub fn os_explore(path: String) -> Result<(), String> {
     Ok(())
 }
 
+/// The personal prompt library lives outside the app bundle so it survives
+/// updates and any Claude session can append to it by editing the file.
+pub fn crydeck_dir() -> PathBuf {
+    let home = std::env::var("USERPROFILE").unwrap_or_else(|_| "C:\\".into());
+    let p = PathBuf::from(&home).join(".crydeck");
+    let _ = std::fs::create_dir_all(&p);
+    p
+}
+
+fn prompts_file() -> PathBuf {
+    crydeck_dir().join("prompts.json")
+}
+
+#[tauri::command]
+pub fn prompts_load() -> String {
+    std::fs::read_to_string(prompts_file()).unwrap_or_else(|_| "{\"prompts\":[]}".into())
+}
+
+#[tauri::command]
+pub fn prompts_save(json: String) -> Result<(), String> {
+    std::fs::write(prompts_file(), json).map_err(|e| e.to_string())
+}
+
 /// `cockpit <folder>` opens a session there on boot. Also what the smoke test
 /// drives, since a headless run cannot click the folder picker.
 #[tauri::command]

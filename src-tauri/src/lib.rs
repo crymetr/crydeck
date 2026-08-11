@@ -38,6 +38,8 @@ pub fn run() {
       fs::git_ls_files,
       fs::git_grep,
       fs::open_in_editor,
+      fs::prompts_load,
+      fs::prompts_save,
       hooks::gateway_info,
       watch::fs_watch_dirs,
       watch::fs_unwatch,
@@ -65,6 +67,7 @@ pub fn run() {
         use tauri::Manager;
         app.manage(gw);
       }
+      watch::watch_prompts(app.handle().clone());
       Ok(())
     })
     .run(tauri::generate_context!())

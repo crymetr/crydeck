@@ -105,3 +105,35 @@ pub fn fs_watch_dirs(
 pub fn fs_unwatch(state: tauri::State<'_, WatchState>, tab: u32) {
     state.sessions.lock().unwrap().remove(&tab);
 }
+
+/// App-lifetime watch on ~/.crydeck so external edits to prompts.json (a Claude
+/// session adding a prompt) show up in the sidebar without an app restart.
+pub fn watch_prompts(app: AppHandle) {
+    let dir = crate::fs::crydeck_dir();
+    std::thread::spawn(move || {
+        let (tx, rx) = mpsc::channel::<()>();
+        let mut watcher = match notify::recommended_watcher(
+            move |res: notify::Result<notify::Event>| {
+                if res.is_ok() {
+                    let _ = tx.send(());
+                }
+            },
+        ) {
+            Ok(w) => w,
+            Err(_) => return,
+        };
+        if watcher.watch(&dir, RecursiveMode::NonRecursive).is_err() {
+            return;
+        }
+        // Same debounce shape as the session watchers.
+        while rx.recv().is_ok() {
+            let deadline = std::time::Instant::now() + Duration::from_millis(250);
+            while let Some(left) = deadline.checked_duration_since(std::time::Instant::now()) {
+                if rx.recv_timeout(left).is_err() {
+                    break;
+                }
+            }
+            let _ = app.emit("cockpit-prompts", ());
+        }
+    });
+}

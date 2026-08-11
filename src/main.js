@@ -1287,66 +1287,170 @@ async function grepPalette() {
   });
 }
 
-function loadPrompts() { try { return JSON.parse(localStorage.getItem('cockpit.prompts') || '[]'); } catch { return []; } }
-function savePrompts(p) { localStorage.setItem('cockpit.prompts', JSON.stringify(p)); }
+/* ---------- prompt library ---------- */
+// Lives in ~\.crydeck\prompts.json — outside the app bundle on purpose, so it
+// survives updates and any Claude session can append to it (tell Claude "add
+// this to my prompt library"). The Rust side watches ~\.crydeck and emits
+// cockpit-prompts on change, so external edits show up in the sidebar live.
+let promptLib = [];
+
+function normalizePrompts(raw) {
+  try {
+    const j = JSON.parse(raw);
+    const arr = Array.isArray(j) ? j : Array.isArray(j.prompts) ? j.prompts : [];
+    return arr
+      .map((p) => typeof p === 'string'
+        ? { title: p.length > 60 ? p.slice(0, 60) + '…' : p, desc: '', prompt: p }
+        : { title: String(p.title || p.prompt || '').slice(0, 120),
+            desc: String(p.desc || p.description || ''),
+            prompt: String(p.prompt || '') })
+      .filter((p) => p.prompt);
+  } catch { return []; }
+}
+
+async function loadPromptLib() {
+  promptLib = normalizePrompts(await invoke('prompts_load').catch(() => '{"prompts":[]}'));
+  // One-time migration of the pre-v0.14 localStorage store.
+  const old = localStorage.getItem('cockpit.prompts');
+  if (old) {
+    for (const t of normalizePrompts(old))
+      if (!promptLib.some((p) => p.prompt === t.prompt)) promptLib.push(t);
+    localStorage.removeItem('cockpit.prompts');
+    if (old !== '[]') await savePromptLib();
+  }
+  renderPromptPanel();
+}
+
+function savePromptLib() {
+  const doc = {
+    _readme: 'CryDeck prompt library. Items: {title, desc, prompt}. Edit freely — the app reloads this file live. Claude: to save a prompt for the user, append an item here.',
+    prompts: promptLib,
+  };
+  return invoke('prompts_save', { json: JSON.stringify(doc, null, 2) }).catch(() => {});
+}
+
+// Type into the active session WITHOUT sending Enter — Sait presses Enter
+// himself. Multi-line prompts go as a bracketed paste so newlines don't submit.
+function typePrompt(text) {
+  if (!active) return;
+  insertIntoActive(text.includes('\n') ? `\x1b[200~${text}\x1b[201~` : text);
+}
+
+function renderPromptPanel() {
+  const list = document.querySelector('#prompts .plist');
+  if (!list) return;
+  list.innerHTML = '';
+  if (!promptLib.length) {
+    const d = document.createElement('div');
+    d.className = 'pempty';
+    d.textContent = 'No prompts yet. ＋ saves one, or tell Claude in any session: "add this to my prompt library".';
+    list.append(d);
+    return;
+  }
+  promptLib.forEach((p, i) => {
+    const r = document.createElement('div');
+    r.className = 'prow';
+    r.title = p.prompt.length > 400 ? p.prompt.slice(0, 400) + '…' : p.prompt;
+    r.innerHTML =
+      `<div class="pname"><span class="pacts"><button data-a="edit" title="Edit">✎</button>` +
+      `<button data-a="del" title="Delete">✕</button></span>${esc(p.title)}</div>` +
+      (p.desc ? `<div class="pdesc">${esc(p.desc)}</div>` : '');
+    r.onclick = async (e) => {
+      const a = e.target.closest('button')?.dataset.a;
+      if (a === 'edit') { editPromptDialog(i); return; }
+      if (a === 'del') {
+        if (await uiConfirm(`Delete prompt "${p.title}"?`, 'Delete')) {
+          promptLib.splice(i, 1);
+          await savePromptLib();
+          renderPromptPanel();
+        }
+        return;
+      }
+      typePrompt(p.prompt);
+    };
+    list.append(r);
+  });
+}
+
+// Three-field editor (title / what it does / the prompt itself), used by both
+// the ＋ button and ✎ on a row. idx === null means new.
+function editPromptDialog(idx = null) {
+  const cur = idx !== null ? promptLib[idx] : { title: '', desc: '', prompt: '' };
+  const wrap = document.createElement('div');
+  wrap.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.55);display:flex;align-items:center;justify-content:center;z-index:9999';
+  const card = document.createElement('div');
+  card.style.cssText = 'background:#17171c;border:1px solid #2a2a32;border-radius:8px;padding:18px 20px;width:520px;max-width:92vw;color:#d8d8de;font:13px system-ui';
+  const fld = 'width:100%;box-sizing:border-box;padding:8px 10px;background:#101014;border:1px solid #2a2a32;border-radius:5px;color:#eee;font:13px system-ui;outline:none;margin:4px 0 10px';
+  card.innerHTML =
+    `<div style="margin-bottom:6px;font-weight:600">${idx !== null ? 'Edit prompt' : 'New prompt'}</div>` +
+    `<div style="color:#8a8a94">Title</div><input id="pe-title" style="${fld}" />` +
+    `<div style="color:#8a8a94">What it does (shown on hover)</div><input id="pe-desc" style="${fld}" />` +
+    `<div style="color:#8a8a94">Prompt</div><textarea id="pe-text" rows="6" style="${fld};resize:vertical;font:12px 'Cascadia Mono',Consolas,monospace"></textarea>` +
+    `<div style="display:flex;gap:8px;justify-content:flex-end">` +
+    `<button id="pe-cancel" style="padding:6px 14px;border-radius:6px;border:1px solid #3a3a44;background:#22222a;color:#eee;cursor:pointer;font:12.5px system-ui">Cancel</button>` +
+    `<button id="pe-save" style="padding:6px 14px;border-radius:6px;border:1px solid #2a5;background:#264d2e;color:#eee;cursor:pointer;font:12.5px system-ui">Save</button></div>`;
+  wrap.append(card);
+  document.body.append(wrap);
+  const $ = (id) => card.querySelector(id);
+  $('#pe-title').value = cur.title;
+  $('#pe-desc').value = cur.desc;
+  $('#pe-text').value = cur.prompt;
+  const close = () => wrap.remove();
+  $('#pe-cancel').onclick = close;
+  wrap.onclick = (e) => { if (e.target === wrap) close(); };
+  card.addEventListener('keydown', (e) => { if (e.key === 'Escape') close(); });
+  $('#pe-save').onclick = async () => {
+    const prompt = $('#pe-text').value.trim();
+    if (!prompt) return;
+    const item = {
+      title: $('#pe-title').value.trim() || (prompt.length > 60 ? prompt.slice(0, 60) + '…' : prompt),
+      desc: $('#pe-desc').value.trim(),
+      prompt,
+    };
+    if (idx !== null) promptLib[idx] = item; else promptLib.push(item);
+    close();
+    await savePromptLib();
+    renderPromptPanel();
+  };
+  $('#pe-title').focus();
+}
 
 function promptsPalette() {
   if (!active) return;
   const items = (q = '') => {
-    const p = loadPrompts();
     const ql = q.toLowerCase();
-    const rows = p
-      .map((t, idx) => ({ value: t, idx }))
-      .filter((r) => !ql || r.value.toLowerCase().includes(ql))
-      .map((r) => ({ ...r, html: esc(r.value.length > 90 ? r.value.slice(0, 90) + '…' : r.value) }));
+    const rows = promptLib
+      .filter((p) => !ql || (p.title + ' ' + p.desc + ' ' + p.prompt).toLowerCase().includes(ql))
+      .map((p) => ({
+        value: p.prompt,
+        html: esc(p.title) + (p.desc ? `  <span style="color:#8a8a94">${esc(p.desc)}</span>` : ''),
+      }));
     rows.push({ add: true, html: '<span style="color:#7aa2ff">＋ Save a new prompt…</span>' });
     return rows;
   };
   openPalette({
-    placeholder: 'Prompts — Enter types the prompt into the session',
+    placeholder: 'Prompts — Enter types the prompt into the session (you press Enter to send)',
     initial: items(),
     onInput: (q) => items(q),
-    onPick: async (it) => {
-      if (it.add) {
-        const t = await uiPrompt('New prompt text');
-        if (t && t.trim()) { const p = loadPrompts(); p.push(t.trim()); savePrompts(p); }
-        return;
-      }
-      insertIntoActive(it.value);
-    },
+    onPick: (it) => { if (it.add) editPromptDialog(); else typePrompt(it.value); },
   });
 }
 
-// Minimal one-line text prompt, styled like uiConfirm. Resolves to the string
-// or null on cancel.
-function uiPrompt(msg) {
-  return new Promise((resolve) => {
-    const wrap = document.createElement('div');
-    wrap.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.55);display:flex;align-items:center;justify-content:center;z-index:9999';
-    const card = document.createElement('div');
-    card.style.cssText = 'background:#17171c;border:1px solid #2a2a32;border-radius:8px;padding:18px 20px;width:420px;color:#d8d8de;font:13px system-ui';
-    const p = document.createElement('div');
-    p.textContent = msg;
-    p.style.cssText = 'margin-bottom:10px';
-    const inp = document.createElement('input');
-    inp.style.cssText = 'width:100%;box-sizing:border-box;padding:8px 10px;background:#101014;border:1px solid #2a2a32;border-radius:5px;color:#eee;font:13px system-ui;outline:none;margin-bottom:12px';
-    const row = document.createElement('div');
-    row.style.cssText = 'display:flex;gap:8px;justify-content:flex-end';
-    const done = (v) => { wrap.remove(); resolve(v); };
-    const mk = (label, val, accent) => {
-      const b = document.createElement('button');
-      b.textContent = label;
-      b.style.cssText = `padding:6px 14px;border-radius:6px;border:1px solid ${accent ? '#2a5' : '#3a3a44'};background:${accent ? '#264d2e' : '#22222a'};color:#eee;cursor:pointer;font:12.5px system-ui`;
-      b.onclick = () => done(val === 'ok' ? inp.value : null);
-      return b;
-    };
-    row.append(mk('Cancel', 'cancel', false), mk('Save', 'ok', true));
-    inp.addEventListener('keydown', (e) => { if (e.key === 'Enter') done(inp.value); if (e.key === 'Escape') done(null); });
-    card.append(p, inp, row);
-    wrap.append(card);
-    document.body.append(wrap);
-    inp.focus();
-  });
+// Sidebar panel wiring: add, collapse, live reload on external file edits.
+{
+  const panel = document.getElementById('prompts');
+  const fold = document.getElementById('pr-fold');
+  const setFold = (closed) => {
+    panel.classList.toggle('closed', closed);
+    fold.textContent = closed ? '▸' : '▾';
+    localStorage.setItem('cockpit.promptsFold', closed ? '1' : '');
+  };
+  document.getElementById('pr-add').onclick = (e) => { e.stopPropagation(); editPromptDialog(); };
+  fold.onclick = (e) => { e.stopPropagation(); setFold(!panel.classList.contains('closed')); };
+  panel.querySelector('.phdr').onclick = () => setFold(!panel.classList.contains('closed'));
+  setFold(localStorage.getItem('cockpit.promptsFold') === '1');
+  listen('cockpit-prompts', () => loadPromptLib());
+  loadPromptLib();
 }
 
 window.addEventListener('keydown', (e) => {
@@ -1670,6 +1774,11 @@ Short list of everything. For detail see the [GitHub README](https://github.com/
 **Remote & orchestration**
 - Remote Control: steer any session from your phone or the web.
 - \`crydeck\` CLI on every session: \`spawn <folder> [prompt]\`, \`list\`, \`read <id>\`, \`send <id> <text>\` — so a session can open and drive others (and you can spawn new work from your phone).
+
+**Prompt library**
+- Bottom-left panel: click a title to type that prompt into the active session — you press Enter to send. Hover shows what it does.
+- Lives in \`~\\.crydeck\\prompts.json\` and reloads live: tell Claude in any session "add this to my prompt library" and it appears without an app update.
+- ＋ adds one by hand, ✎/✕ on hover edit and delete, Ctrl+Shift+K searches the same library.
 
 **Shortcuts & OS**
 - Ctrl+Shift+P find file · Ctrl+Shift+F search in files · Ctrl+Shift+E open in VS Code · Ctrl+Shift+K prompts.

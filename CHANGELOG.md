@@ -3,6 +3,13 @@
 All notable changes to CryDeck. Format loosely follows Keep a Changelog;
 versions are git tags.
 
+## v0.14.0 - 2026-08-11
+
+### Added
+- **Prompt library panel** bottom-left, under the file tree. Prompts list by title; hover highlights and shows what each one does; click types the full prompt into the active session without sending it — you press Enter.
+- The library now lives in `~\.crydeck\prompts.json` and reloads live. Any Claude session can add to it ("add this to my prompt library") — no app update needed. Old Ctrl+Shift+K prompts migrate automatically.
+- ＋ in the panel header opens a title / description / prompt editor; ✎ and ✕ on hover edit and delete. Ctrl+Shift+K searches the same library and no longer sends Enter either.
+
 ## v0.13.4 - 2026-08-11
 
 ### Changed
