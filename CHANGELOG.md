@@ -3,6 +3,11 @@
 All notable changes to CryDeck. Format loosely follows Keep a Changelog;
 versions are git tags.
 
+## v0.17.1 - 2026-08-13
+
+### Fixed
+- **Right-click pasted twice.** The paste path is async, so a duplicated right-click event could start a second run before the first had written anything. Paste is single-flight now with a short cooldown, and terminal clipboard wiring is idempotent.
+
 ## v0.17.0 - 2026-08-13
 
 ### Added

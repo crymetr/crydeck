@@ -172,6 +172,10 @@ function showModelMenu(btn) {
 // right-click pastes directly. term.paste() goes through xterm so bracketed
 // paste mode is honored.
 function wireClipboard(term, box) {
+  // Wiring is idempotent: a second call on the same box would stack another
+  // contextmenu listener and paste twice per right-click.
+  if (box.dataset.clipWired) return;
+  box.dataset.clipWired = '1';
   term.attachCustomKeyEventHandler((ev) => {
     if (ev.type !== 'keydown' || !ev.ctrlKey) return true;
     if (ev.code === 'KeyV') {
@@ -195,11 +199,24 @@ function wireClipboard(term, box) {
   });
 }
 
+// One trigger, one paste. doPaste is async (clipboard IPC, image save), so a
+// duplicated right-click event used to start a second run before the first had
+// written anything and the text landed twice. Single-flight plus a short
+// cooldown makes that impossible whatever fires the duplicate.
+const quotePath = (p) => (p.includes(' ') ? `"${p}"` : p);
+let pasteBusy = false;
+let pasteDone = 0;
+async function smartPaste(term) {
+  if (pasteBusy || Date.now() - pasteDone < 250) return;
+  pasteBusy = true;
+  try { await doPaste(term); }
+  finally { pasteBusy = false; pasteDone = Date.now(); }
+}
+
 // Paste whatever the clipboard actually holds: Explorer-copied files paste as
 // their paths, a copied image (screenshot) is saved under ~\.crydeck\pastes and
 // its path pasted so Claude can read it, plain text pastes as text.
-const quotePath = (p) => (p.includes(' ') ? `"${p}"` : p);
-async function smartPaste(term) {
+async function doPaste(term) {
   const paths = await invoke('clip_paths').catch(() => []);
   if (paths.length) { term.paste(paths.map(quotePath).join(' ') + ' '); return; }
   try {
