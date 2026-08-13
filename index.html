@@ -61,6 +61,12 @@
   #modelmenu .mm-row.off { opacity: .45; }
   #modelmenu .mm-tick { width: 10px; color: var(--accent); }
   #modelmenu .mm-note { margin-left: auto; color: var(--dim); font-size: 11px; }
+
+  /* ---- update pill (appears when a release is waiting) ---- */
+  #updatebtn { align-self: center; margin: 0 4px 0 2px; font: inherit; cursor: pointer;
+    background: #3a2c0a; border: 1px solid #6d5312; border-radius: 5px;
+    color: var(--changed); padding: 3px 9px; white-space: nowrap; }
+  #updatebtn:hover { background: #4a3809; border-color: #8a6a18; }
   #modelmenu .mm-chips { display: flex; flex-wrap: wrap; gap: 4px; padding: 2px 8px 4px; }
   #modelmenu .mm-chip { font: inherit; cursor: pointer; padding: 2px 8px;
     background: var(--bg2); border: 1px solid var(--line); border-radius: 4px; color: var(--dim); }

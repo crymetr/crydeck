@@ -3,6 +3,11 @@
 All notable changes to CryDeck. Format loosely follows Keep a Changelog;
 versions are git tags.
 
+## v0.18.0 - 2026-08-13
+
+### Changed
+- **Updates are found while the app runs.** CryDeck checks for a new release every 10 minutes (and on window focus, at most every 5), not only at boot. A waiting release shows as an amber ↑ pill in the tab bar plus one desktop notification, never a popup over your work. Click the pill to install and restart when it suits you.
+
 ## v0.17.1 - 2026-08-13
 
 ### Fixed

@@ -1975,6 +1975,7 @@ Short list of everything. For detail see the [GitHub README](https://github.com/
 - Fresh PC: first run installs PowerShell 7, Git, and Claude Code, then logs you in.
 - Up to 10 sessions, plus up to 3 extra plain terminals under each.
 - Starts with Windows (toggle above) and auto-updates itself.
+- New version while you work: an amber ↑ pill appears in the tab bar (checked every 10 minutes, no popup). Click it when you are ready — installing restarts CryDeck.
 
 **Know what each session is doing**
 - Tab dot: blue working, amber done, red waiting on you, none idle.
@@ -2099,13 +2100,52 @@ async function showAbout() {
   document.body.append(wrap);
 }
 
-// Auto-update: check GitHub Releases (latest.json) after boot, ask, install,
-// relaunch. Dev builds and offline starts fail the check silently — that's fine.
+// Auto-update: check GitHub Releases (latest.json) after boot, then every 10
+// minutes while the app runs and whenever the window regains focus, so a fresh
+// release shows up without closing and reopening to find it. Dev builds and
+// offline starts fail the check silently — that's fine.
+//
+// A find never interrupts: installing relaunches the app and takes every
+// session down with it, so the update waits behind a pill in the tab bar until
+// it is a good moment to click it. Polling stops once one is found.
+const UPDATE_POLL_MS = 10 * 60 * 1000;
+const UPDATE_FOCUS_MIN_MS = 5 * 60 * 1000;
+let updateFound = null;
+let lastUpdateCheck = 0;
+
 async function maybeUpdate() {
+  if (updateFound) return;
+  lastUpdateCheck = Date.now();
   let up;
   try { up = await checkUpdate(); } catch (e) { trace(`update check: ${e}`); return; }
   if (!up) return;
-  if (!(await uiConfirm(`CryDeck ${up.version} is available (you have ${up.currentVersion}).\nInstall and restart now?`, 'Update')))
+  updateFound = up;
+  trace(`update ${up.version} available`);
+  showUpdateBtn(up);
+  if (notifyOk) {
+    try { sendNotification({ title: 'CryDeck', body: `v${up.version} is ready to install` }); } catch {}
+  }
+}
+
+setInterval(maybeUpdate, UPDATE_POLL_MS);
+getCurrentWindow()
+  .onFocusChanged(({ payload: focused }) => {
+    if (focused && Date.now() - lastUpdateCheck >= UPDATE_FOCUS_MIN_MS) maybeUpdate();
+  })
+  .catch(() => {});
+
+function showUpdateBtn(up) {
+  if ($('updatebtn')) return;
+  const b = document.createElement('button');
+  b.id = 'updatebtn';
+  b.textContent = `↑ v${up.version}`;
+  b.title = `CryDeck ${up.version} is ready (you have ${up.currentVersion}). Installing closes your sessions and restarts.`;
+  b.onclick = () => installUpdate(up);
+  $('tabs').appendChild(b);
+}
+
+async function installUpdate(up) {
+  if (!(await uiConfirm(`Install CryDeck ${up.version} now?\nSessions close and CryDeck restarts.`, 'Update')))
     return;
   try {
     await up.downloadAndInstall();
