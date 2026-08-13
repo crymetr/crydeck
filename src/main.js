@@ -777,10 +777,10 @@ async function renderFile(s) {
     }).catch(() => {});
   }
 
-  // A dirty file gets a Content|Diff switch; freshly-Claude-changed files
-  // default to the diff, because "what did it just do" is the actual question.
+  // A dirty file gets a Content|Diff switch. Content is always the landing
+  // view; the diff is one click away when you want it.
   if (diff && c.kind === 'text') {
-    if (s.pvView == null) s.pvView = s.changed.has(norm(s.pvFile)) ? 'diff' : 'content';
+    if (s.pvView == null) s.pvView = 'content';
     const bar = document.createElement('div');
     bar.className = 'viewsel';
     for (const v of ['content', 'diff']) {

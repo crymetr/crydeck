@@ -3,6 +3,11 @@
 All notable changes to CryDeck. Format loosely follows Keep a Changelog;
 versions are git tags.
 
+## v0.16.1 - 2026-08-13
+
+### Changed
+- **File view opens on Content.** Clicking a file always lands on Content now, even for files Claude just changed. Diff is still one click away in the Content|Diff switch.
+
 ## v0.16.0 - 2026-08-11
 
 ### Added
