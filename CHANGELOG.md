@@ -3,6 +3,11 @@
 All notable changes to CryDeck. Format loosely follows Keep a Changelog;
 versions are git tags.
 
+## v0.17.0 - 2026-08-13
+
+### Added
+- **Model & effort picker** in the top right of the tab bar. Pick a model (Opus 5, Opus 4.8, Sonnet 5, Fable 5, Haiku 4.5), an effort level (low → max), and optionally 1M context. The choice is typed into the active session as `/model` and `/effort` right away, and is saved as the default, so every new tab launches with `--model` / `--effort` already set. `Default` leaves it to `~\.claude\settings.json`.
+
 ## v0.16.1 - 2026-08-13
 
 ### Changed

@@ -43,6 +43,31 @@
   #newtab { border: 1px dashed var(--line); background: none; color: var(--dim);
     border-radius: 6px 6px 0 0; padding: 0 12px; cursor: pointer; font: inherit; }
   #newtab:hover { color: var(--fg); border-color: #45454f; }
+
+  /* ---- model / effort picker ---- */
+  #modelbtn { margin-left: auto; align-self: center; font: inherit; cursor: pointer;
+    background: var(--bg3); border: 1px solid var(--line); border-radius: 5px;
+    color: var(--dim); padding: 3px 9px; white-space: nowrap; }
+  #modelbtn:hover { color: var(--fg); border-color: #45454f; }
+  #modelmenu { position: fixed; z-index: 99; width: 250px; padding: 5px;
+    background: var(--bg3); border: 1px solid #35353f; border-radius: 6px;
+    box-shadow: 0 6px 20px rgba(0,0,0,.5); }
+  #modelmenu .mm-h { color: var(--dim); padding: 6px 8px 3px; font-size: 11px;
+    text-transform: uppercase; letter-spacing: .5px; }
+  #modelmenu .mm-row { display: flex; align-items: center; gap: 6px;
+    padding: 5px 8px; border-radius: 4px; cursor: pointer; }
+  #modelmenu .mm-row:hover { background: #24304a; }
+  #modelmenu .mm-row.on { color: var(--fg); }
+  #modelmenu .mm-row.off { opacity: .45; }
+  #modelmenu .mm-tick { width: 10px; color: var(--accent); }
+  #modelmenu .mm-note { margin-left: auto; color: var(--dim); font-size: 11px; }
+  #modelmenu .mm-chips { display: flex; flex-wrap: wrap; gap: 4px; padding: 2px 8px 4px; }
+  #modelmenu .mm-chip { font: inherit; cursor: pointer; padding: 2px 8px;
+    background: var(--bg2); border: 1px solid var(--line); border-radius: 4px; color: var(--dim); }
+  #modelmenu .mm-chip:hover { color: var(--fg); }
+  #modelmenu .mm-chip.on { background: #24304a; border-color: var(--accent); color: var(--fg); }
+  #modelmenu .mm-foot { color: var(--dim); font-size: 11px; padding: 6px 8px 3px;
+    border-top: 1px solid var(--line); margin-top: 5px; }
   #empty { grid-area: term; display: flex; flex-direction: column; gap: 10px;
     align-items: center; justify-content: center; color: var(--dim);
     position: relative; z-index: 5; }

@@ -37,6 +37,134 @@ let gw = null;                 // { port, init_ps1, settings_json }
 const sessions = new Map();    // ptyId -> session
 let active = null;             // session or null
 
+// --------------------------------------------------------- model / effort
+// Claude Code takes --model/--effort at launch and /model, /effort in-session,
+// so one picker drives both: new tabs get the flags, the live tab gets the
+// slash commands typed into it. Every id below was launched once and checked
+// against the session transcript, so none of them silently fall back to
+// another model. `m1` marks the ones that accept the [1m] long-context suffix
+// (Haiku does not).
+const MODELS = [
+  { id: '', label: 'Default', note: 'from ~\\.claude\\settings.json' },
+  { id: 'claude-opus-5', label: 'Opus 5', m1: true },
+  { id: 'claude-opus-4-8', label: 'Opus 4.8', m1: true },
+  { id: 'claude-sonnet-5', label: 'Sonnet 5', m1: true },
+  { id: 'claude-fable-5', label: 'Fable 5', m1: true },
+  { id: 'claude-haiku-4-5', label: 'Haiku 4.5', m1: false },
+];
+const EFFORTS = ['', 'low', 'medium', 'high', 'xhigh', 'max'];
+
+const prefModel = () => MODELS.find((m) => m.id === localStorage.getItem('cockpit.model')) || MODELS[0];
+const prefEffort = () => {
+  const e = localStorage.getItem('cockpit.effort') || '';
+  return EFFORTS.includes(e) ? e : '';
+};
+const pref1m = () => localStorage.getItem('cockpit.model1m') === '1';
+
+// The exact --model / /model argument: id plus the [1m] suffix when the model
+// supports it and the toggle is on.
+function modelArg() {
+  const m = prefModel();
+  return m.id && m.m1 && pref1m() ? `${m.id}[1m]` : m.id;
+}
+
+function launchFlags() {
+  const m = modelArg(), e = prefEffort();
+  return (m ? `--model "${m}" ` : '') + (e ? `--effort ${e} ` : '');
+}
+
+function modelBtnLabel() {
+  const m = prefModel(), e = prefEffort();
+  const one = m.id && m.m1 && pref1m() ? ' 1M' : '';
+  return `${m.label}${one}${e ? ' · ' + e : ''}`;
+}
+
+// Type a slash command into the live session. Default (empty) selections have
+// no in-session equivalent, so they only take effect on the next tab.
+function typeToActive(cmd) {
+  if (active?.ptyId) invoke('pty_write', { id: active.ptyId, data: `${cmd}\r` }).catch(() => {});
+}
+
+function paintModelBtn() {
+  const b = $('modelbtn');
+  if (b) b.textContent = modelBtnLabel();
+}
+
+function showModelMenu(btn) {
+  $('modelmenu')?.remove();
+  const r = btn.getBoundingClientRect();
+  const panel = document.createElement('div');
+  panel.id = 'modelmenu';
+  panel.style.top = `${r.bottom + 4}px`;
+  panel.style.right = `${Math.max(6, window.innerWidth - r.right)}px`;
+
+  const paint = () => {
+    panel.innerHTML = '';
+    const sec = (t) => {
+      const h = document.createElement('div');
+      h.className = 'mm-h';
+      h.textContent = t;
+      panel.appendChild(h);
+    };
+
+    sec('Model');
+    for (const m of MODELS) {
+      const row = document.createElement('div');
+      row.className = 'mm-row' + (m.id === prefModel().id ? ' on' : '');
+      row.innerHTML = `<span class="mm-tick">${m.id === prefModel().id ? '✓' : ''}</span>` +
+        `<span>${esc(m.label)}</span>` + (m.note ? `<span class="mm-note">${esc(m.note)}</span>` : '');
+      row.onclick = () => {
+        localStorage.setItem('cockpit.model', m.id);
+        if (m.id) typeToActive(`/model ${modelArg()}`);
+        paintModelBtn(); paint();
+      };
+      panel.appendChild(row);
+    }
+
+    const one = document.createElement('div');
+    one.className = 'mm-row' + (pref1m() ? ' on' : '') + (prefModel().m1 ? '' : ' off');
+    one.innerHTML = `<span class="mm-tick">${pref1m() ? '✓' : ''}</span><span>1M context</span>` +
+      (prefModel().m1 ? '' : '<span class="mm-note">not on this model</span>');
+    one.onclick = () => {
+      localStorage.setItem('cockpit.model1m', pref1m() ? '' : '1');
+      if (prefModel().id) typeToActive(`/model ${modelArg()}`);
+      paintModelBtn(); paint();
+    };
+    panel.appendChild(one);
+
+    sec('Effort');
+    const chips = document.createElement('div');
+    chips.className = 'mm-chips';
+    for (const e of EFFORTS) {
+      const c = document.createElement('button');
+      c.className = 'mm-chip' + (e === prefEffort() ? ' on' : '');
+      c.textContent = e || 'default';
+      c.onclick = () => {
+        localStorage.setItem('cockpit.effort', e);
+        if (e) typeToActive(`/effort ${e}`);
+        paintModelBtn(); paint();
+      };
+      chips.appendChild(c);
+    }
+    panel.appendChild(chips);
+
+    const foot = document.createElement('div');
+    foot.className = 'mm-foot';
+    foot.textContent = 'Applies to the active session now, and to every new session. ' +
+      'Default only takes effect on the next session.';
+    panel.appendChild(foot);
+  };
+
+  paint();
+  document.body.appendChild(panel);
+  const kill = () => { panel.remove(); window.removeEventListener('pointerdown', onDown, true); };
+  const onDown = (e) => { if (!panel.contains(e.target) && e.target !== btn) kill(); };
+  window.addEventListener('pointerdown', onDown, true);
+  window.addEventListener('keydown', function onKey(e) {
+    if (e.key === 'Escape') { kill(); window.removeEventListener('keydown', onKey); }
+  });
+}
+
 // ------------------------------------------------------------------ sessions
 
 // Ctrl+V / Ctrl+Shift+V paste, Ctrl+C / Ctrl+Shift+C copy when a selection
@@ -301,7 +429,7 @@ async function newSession(cwd, opts = {}) {
   const resume = opts.resume ? '--continue ' : '';
   setTimeout(() => {
     if (!sessions.has(s.ptyId)) return;
-    const launch = `claude ${resume}--remote-control "${basename(cwd)}"`;
+    const launch = `claude ${resume}${launchFlags()}--remote-control "${basename(cwd)}"`;
     if (opts.setup) {
       // First run with missing prerequisites: install them right here in the
       // tab, refresh PATH so this same shell sees the new binaries, then fall
@@ -1752,11 +1880,18 @@ async function boot() {
   nt.onclick = pickAndOpen;
   $('tabs').appendChild(nt);
 
+  const mb = document.createElement('button');
+  mb.id = 'modelbtn';
+  mb.title = 'Model and effort for Claude';
+  mb.textContent = modelBtnLabel();
+  mb.onclick = () => ($('modelmenu') ? $('modelmenu').remove() : showModelMenu(mb));
+  $('tabs').appendChild(mb);
+
   const ab = document.createElement('button');
   ab.id = 'about-btn';
   ab.textContent = 'ⓘ';
   ab.title = 'About CryDeck';
-  ab.style.cssText = 'margin-left:auto;background:none;border:none;color:#6a6a74;cursor:pointer;font-size:14px;padding:0 10px;align-self:center';
+  ab.style.cssText = 'background:none;border:none;color:#6a6a74;cursor:pointer;font-size:14px;padding:0 10px;align-self:center';
   ab.onclick = showAbout;
   $('tabs').appendChild(ab);
 
@@ -1828,6 +1963,7 @@ Short list of everything. For detail see the [GitHub README](https://github.com/
 - Tab dot: blue working, amber done, red waiting on you, none idle.
 - Desktop notification when a background session finishes or needs you.
 - Status bar: model, effort, context %, rate limits, session cost.
+- Model & effort picker (top right): switches the active session right away and every new one after it.
 - Auto-continue after a rate limit: right-click a tab to schedule it.
 
 **The file tree & preview**
