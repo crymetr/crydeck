@@ -440,10 +440,18 @@ async function newSession(cwd, opts = {}) {
   wireClipboard(s.term, s.box);
 
   // A tab IS a Claude session: launch it once the shell has settled, with
-  // Remote Control on so the phone can pick any session up. Restored tabs
-  // resume their folder's last conversation — closing the app kills the
-  // processes (by design), not the conversations.
-  const resume = opts.resume ? '--continue ' : '';
+  // Remote Control on so the phone can pick any session up. Closing the app
+  // kills the processes (by design), not the conversations.
+  //
+  // Restore resumes by session id, not `--continue`: `--continue` means "the
+  // last conversation in this folder", so five tabs on one folder all came
+  // back as the same conversation. The id is the one the hooks bound to the
+  // tab; without one (older saved state, a tab that never ran a hook) it falls
+  // back to the folder's last conversation.
+  // The id goes onto a shell command line, so only a plain uuid-shaped token is
+  // allowed through; anything else falls back rather than typing junk.
+  const sid = /^[A-Za-z0-9-]{8,64}$/.test(opts.sid || '') ? opts.sid : null;
+  const resume = sid ? `--resume ${sid} ` : (opts.resume ? '--continue ' : '');
   setTimeout(() => {
     if (!sessions.has(s.ptyId)) return;
     const launch = `claude ${resume}${launchFlags()}--remote-control "${basename(cwd)}"`;
@@ -631,8 +639,12 @@ function cancelAutoCont(s) {
   renderStatus();
 }
 
+// Saved tabs carry the Claude session id alongside the folder so each one comes
+// back as its own conversation. Written on open/close and again whenever a tab
+// binds a new id, so a Claude restarted mid-session is what gets restored.
 function persistTabs() {
-  localStorage.setItem('cockpit.tabs', JSON.stringify([...sessions.values()].map((s) => s.cwd)));
+  const tabs = [...sessions.values()].map((s) => ({ cwd: s.cwd, sid: s.claudeSid || null }));
+  localStorage.setItem('cockpit.tabs', JSON.stringify(tabs));
   // Keep the backend session roster (for `crydeck list`) in step with the tabs.
   // Name comes from the tab title when Claude has narrated one, else the folder.
   const roster = [...sessions.values()].map((s) => ({
@@ -1208,7 +1220,11 @@ function sessionForHook(j) {
     if (!s.claudeSid) { best = s; break; }
     best ??= s; // all bound: claude restarted in this tab, rebind below
   }
-  if (best && sid) best.claudeSid = sid;
+  // A fresh binding is also what restore needs, so save it right away.
+  if (best && sid && best.claudeSid !== sid) {
+    best.claudeSid = sid;
+    persistTabs();
+  }
   return best;
 }
 
@@ -1849,7 +1865,7 @@ document.addEventListener('contextmenu', (e) => e.preventDefault());
 
 // Closing the window kills every session's process tree (that is the leak
 // protection doing its job) — so make it a decision, not an accident. The
-// conversations themselves survive on disk and restore via --continue.
+// conversations themselves survive on disk and are resumed by session id.
 // window.confirm() is a no-op in Tauri's webview (always falsy), which made
 // the X button dead whenever sessions were live — hence the in-page dialog.
 function uiConfirm(msg, okLabel = 'Close') {
@@ -1914,8 +1930,12 @@ async function boot() {
 
   let restored = [];
   try { restored = JSON.parse(localStorage.getItem('cockpit.tabs') || '[]'); } catch {}
-  for (const cwd of restored.slice(0, MAX_SESSIONS)) {
-    try { await newSession(cwd, { resume: true }); } catch (e) { trace(`restore ${cwd} failed: ${e}`); }
+  for (const t of restored.slice(0, MAX_SESSIONS)) {
+    // Builds before v0.18.1 saved bare folder strings, with no session id.
+    const cwd = typeof t === 'string' ? t : t?.cwd;
+    const sid = typeof t === 'string' ? null : t?.sid;
+    if (!cwd) continue;
+    try { await newSession(cwd, { resume: true, sid }); } catch (e) { trace(`restore ${cwd} failed: ${e}`); }
   }
   const cli = await invoke('boot_folder');
   if (cli && ![...sessions.values()].some((s) => norm(s.cwd) === norm(cli))) {

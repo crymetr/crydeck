@@ -3,6 +3,11 @@
 All notable changes to CryDeck. Format loosely follows Keep a Changelog;
 versions are git tags.
 
+## v0.18.1 - 2026-08-13
+
+### Fixed
+- **Restored tabs all came back as the same conversation.** Tabs were resumed with `--continue`, which means "the last conversation in this folder", so several tabs on one folder reopened onto one session. Each tab now saves its own Claude session id and resumes that. Tabs saved by an older build have no id and still fall back to `--continue` for one launch.
+
 ## v0.18.0 - 2026-08-13
 
 ### Changed

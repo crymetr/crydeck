@@ -50,9 +50,9 @@ is the entire reason it stays light (~250MB working set, single small binary).
   flows into Claude's login. On a machine that already has them, you see none
   of it.
 - **Tabs are sessions.** One working directory + one Claude Code process per
-  tab (cap 6), restored on relaunch **with their conversations** (via
-  `--continue`). Sessions launch with Remote Control on, so your phone can
-  pick any of them up. The tab dot is a four-state badge: **blue** working,
+  tab (cap 6), restored on relaunch **with their conversations** (each tab
+  resumes its own session id, so several tabs on one folder stay separate).
+  Sessions launch with Remote Control on, so your phone can pick any of them up. The tab dot is a four-state badge: **blue** working,
   **amber** done, **red** waiting on you (a permission or a question), or none
   when idle.
 - **Orchestration — drive sessions from a session.** A `crydeck` CLI on every
@@ -154,7 +154,7 @@ running (PLAN.md, Phase 0 defect 4).
 - Windows-only by design (ConPTY, cmd/Explorer integration).
 - Closing a tab kills its whole process tree via a kill-on-close Job Object —
   that's the leak protection. The conversation itself survives: the tab
-  resumes it (`--continue`) on next launch.
+  resumes it by session id on next launch.
 - A session's shell is pwsh (or Windows PowerShell); Claude launches
   automatically in each new tab.
 
