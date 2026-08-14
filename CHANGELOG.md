@@ -3,6 +3,11 @@
 All notable changes to CryDeck. Format loosely follows Keep a Changelog;
 versions are git tags.
 
+## v0.18.3 - 2026-08-14
+
+### Fixed
+- **Right-click double paste, round 3.** v0.18.2 swallowed native `paste` events, but WebView2's delayed duplicate can also arrive as a direct editing command into xterm's textarea (`beforeinput`/`textInput`/`input` with `insertFromPaste`), which fires no `paste` event at all and xterm forwards to the pty. All paste-shaped insertion paths are now blocked in the capture phase; typing and IME are untouched. Every paste trigger and every swallowed duplicate is now traced to `%LOCALAPPDATA%\tr.cryme.crydeck\crydeck.log`, so if it ever happens again the log names the exact path it came through.
+
 ## v0.18.2 - 2026-08-14
 
 ### Fixed

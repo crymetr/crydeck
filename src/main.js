@@ -182,7 +182,7 @@ function wireClipboard(term, box) {
       // preventDefault matters: without it the browser ALSO delivers a native
       // paste to xterm's textarea and the text lands twice.
       ev.preventDefault();
-      smartPaste(term);
+      smartPaste(term, ev.isTrusted ? 'ctrl-v' : 'ctrl-v-synthetic');
       return false;
     }
     if (ev.code === 'KeyC') {
@@ -195,7 +195,7 @@ function wireClipboard(term, box) {
   box.addEventListener('contextmenu', (ev) => {
     ev.preventDefault();
     ev.stopPropagation();
-    smartPaste(term);
+    smartPaste(term, 'contextmenu');
   });
   // THE right-click double-paste: WebView2 answers a right-click by issuing a
   // native paste command to xterm's hidden textarea, which xterm handles on its
@@ -203,9 +203,36 @@ function wireClipboard(term, box) {
   // contextmenu one, so a short cooldown never caught it and it went through
   // xterm, not smartPaste. Swallow every native paste in the capture phase so
   // smartPaste (Ctrl+V and right-click) is the only thing that ever pastes.
-  box.addEventListener('paste', (ev) => {
+  //
+  // v0.18.3: swallowing the 'paste' event alone wasn't enough — the delayed
+  // native paste can also land as an editing command straight into xterm's
+  // textarea (beforeinput/textInput/input with insertFromPaste), which never
+  // fires a 'paste' event, and xterm's input handler forwards it to the pty.
+  // Block every paste-shaped insertion path; typed keys and IME composition
+  // use different inputTypes and pass through untouched.
+  const pasteTypes = new Set(['insertFromPaste', 'insertFromPasteAsQuotation', 'insertFromDrop']);
+  const swallow = (ev, tag) => {
     ev.preventDefault();
     ev.stopPropagation();
+    trace(`swallowed native paste via ${tag} (type=${ev.inputType || ev.type})`);
+  };
+  box.addEventListener('paste', (ev) => swallow(ev, 'paste'), true);
+  box.addEventListener('beforeinput', (ev) => {
+    if (pasteTypes.has(ev.inputType)) swallow(ev, 'beforeinput');
+  }, true);
+  // textInput has no inputType so it can't be told apart from IME/emoji-panel
+  // input by shape — only swallow it in the few seconds after one of our own
+  // paste triggers, which is when WebView2's delayed duplicate shows up.
+  box.addEventListener('textInput', (ev) => {
+    if (Date.now() - pasteDone < 3000) swallow(ev, 'textInput');
+  }, true);
+  // Last line of defense: if an insertion still got through beforeinput
+  // uncancelled, stop it from reaching xterm's input handler and wipe it.
+  box.addEventListener('input', (ev) => {
+    if (!pasteTypes.has(ev.inputType)) return;
+    ev.stopPropagation();
+    if (ev.target && 'value' in ev.target) ev.target.value = '';
+    trace(`swallowed native paste via input (late), textarea cleared`);
   }, true);
 }
 
@@ -216,8 +243,9 @@ function wireClipboard(term, box) {
 const quotePath = (p) => (p.includes(' ') ? `"${p}"` : p);
 let pasteBusy = false;
 let pasteDone = 0;
-async function smartPaste(term) {
-  if (pasteBusy || Date.now() - pasteDone < 250) return;
+async function smartPaste(term, src = '?') {
+  if (pasteBusy || Date.now() - pasteDone < 250) { trace(`paste via ${src} skipped (busy/cooldown)`); return; }
+  trace(`paste via ${src}`);
   pasteBusy = true;
   try { await doPaste(term); }
   finally { pasteBusy = false; pasteDone = Date.now(); }
