@@ -197,6 +197,16 @@ function wireClipboard(term, box) {
     ev.stopPropagation();
     smartPaste(term);
   });
+  // THE right-click double-paste: WebView2 answers a right-click by issuing a
+  // native paste command to xterm's hidden textarea, which xterm handles on its
+  // own and writes to the pty — a second paste that arrives up to ~1s after our
+  // contextmenu one, so a short cooldown never caught it and it went through
+  // xterm, not smartPaste. Swallow every native paste in the capture phase so
+  // smartPaste (Ctrl+V and right-click) is the only thing that ever pastes.
+  box.addEventListener('paste', (ev) => {
+    ev.preventDefault();
+    ev.stopPropagation();
+  }, true);
 }
 
 // One trigger, one paste. doPaste is async (clipboard IPC, image save), so a
@@ -216,9 +226,16 @@ async function smartPaste(term) {
 // Paste whatever the clipboard actually holds: Explorer-copied files paste as
 // their paths, a copied image (screenshot) is saved under ~\.crydeck\pastes and
 // its path pasted so Claude can read it, plain text pastes as text.
+//
+// Order is by cost: files (fast IPC) then text (fast) then image. Text used to
+// sit behind navigator.clipboard.read(), which in WebView2 takes ~1s, so every
+// plain paste lagged a second; readText() returns right away, so only an actual
+// image pays the read() cost now.
 async function doPaste(term) {
   const paths = await invoke('clip_paths').catch(() => []);
   if (paths.length) { term.paste(paths.map(quotePath).join(' ') + ' '); return; }
+  const t = await navigator.clipboard.readText().catch(() => '');
+  if (t) { term.paste(t); return; }
   try {
     for (const item of await navigator.clipboard.read()) {
       const type = item.types.find((t) => t.startsWith('image/'));
@@ -236,8 +253,6 @@ async function doPaste(term) {
       return;
     }
   } catch {}
-  const t = await navigator.clipboard.readText().catch(() => '');
-  if (t) term.paste(t);
 }
 
 // First-run prerequisite installer, emitted as a single PowerShell line typed

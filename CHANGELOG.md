@@ -3,6 +3,11 @@
 All notable changes to CryDeck. Format loosely follows Keep a Changelog;
 versions are git tags.
 
+## v0.18.2 - 2026-08-14
+
+### Fixed
+- **Right-click really pastes once now.** The duplicate came from WebView2 issuing a native paste to xterm's textarea on right-click, which xterm pasted itself ~1s after our own paste, past the last fix's cooldown. Native paste events are now swallowed so our handler is the only one that writes. Plain-text paste is also instant again: it no longer waits behind the slow clipboard image read.
+
 ## v0.18.1 - 2026-08-13
 
 ### Fixed
