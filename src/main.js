@@ -1434,8 +1434,21 @@ function fuzzy(items, q) {
   return scored.map((x) => x[1]).slice(0, 300);
 }
 
+// Full-screen DOM overlays (palette, dialogs, the about card) sit *under* the
+// App pane's preview no matter what z-index they use: it's a native Tauri
+// child webview, a separate OS surface that Tauri always draws above the
+// window's whole DOM. Park it off-screen for the overlay's lifetime and put
+// it back after — the same trick setPvMode() already uses when leaving 'app'.
+function hidePreviewForOverlay() {
+  const tab = active;
+  const wasVisible = !!(tab?.previewOpen && tab.pvMode === 'app');
+  if (wasVisible) invoke('preview_visible', { tab: tab.ptyId, visible: false, rect: null }).catch(() => {});
+  return () => { if (wasVisible && sessions.has(tab.ptyId)) showPreview(tab); };
+}
+
 function openPalette({ placeholder, onInput, onPick, initial = [] }) {
   paletteOpen = true;
+  const restorePreview = hidePreviewForOverlay();
   const wrap = document.createElement('div');
   wrap.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.45);display:flex;align-items:flex-start;justify-content:center;z-index:9998;padding-top:12vh';
   const box = document.createElement('div');
@@ -1468,7 +1481,7 @@ function openPalette({ placeholder, onInput, onPick, initial = [] }) {
     paint();
   };
   const pick = (i) => { const it = rows[i]; close(); if (it) onPick(it); };
-  const close = () => { paletteOpen = false; wrap.remove(); window.removeEventListener('keydown', onKey, true); active?.term?.focus(); };
+  const close = () => { paletteOpen = false; wrap.remove(); window.removeEventListener('keydown', onKey, true); active?.term?.focus(); restorePreview(); };
   const onKey = (e) => {
     if (e.key === 'Escape') { e.preventDefault(); close(); }
     else if (e.key === 'ArrowDown') { e.preventDefault(); sel = Math.min(sel + 1, rows.length - 1); paint(); }
@@ -1603,6 +1616,7 @@ function renderPromptPanel() {
 // the ＋ button and ✎ on a row. idx === null means new.
 function editPromptDialog(idx = null) {
   const cur = idx !== null ? promptLib[idx] : { title: '', desc: '', prompt: '' };
+  const restorePreview = hidePreviewForOverlay();
   const wrap = document.createElement('div');
   wrap.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.55);display:flex;align-items:center;justify-content:center;z-index:9999';
   const card = document.createElement('div');
@@ -1622,7 +1636,7 @@ function editPromptDialog(idx = null) {
   $('#pe-title').value = cur.title;
   $('#pe-desc').value = cur.desc;
   $('#pe-text').value = cur.prompt;
-  const close = () => wrap.remove();
+  const close = () => { wrap.remove(); restorePreview(); };
   $('#pe-cancel').onclick = close;
   wrap.onclick = (e) => { if (e.target === wrap) close(); };
   card.addEventListener('keydown', (e) => { if (e.key === 'Escape') close(); });
@@ -1870,6 +1884,7 @@ document.addEventListener('contextmenu', (e) => e.preventDefault());
 // the X button dead whenever sessions were live — hence the in-page dialog.
 function uiConfirm(msg, okLabel = 'Close') {
   return new Promise((resolve) => {
+    const restorePreview = hidePreviewForOverlay();
     const wrap = document.createElement('div');
     wrap.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.55);display:flex;align-items:center;justify-content:center;z-index:9999';
     const card = document.createElement('div');
@@ -1883,13 +1898,13 @@ function uiConfirm(msg, okLabel = 'Close') {
       const b = document.createElement('button');
       b.textContent = label;
       b.style.cssText = `padding:6px 14px;border-radius:6px;border:1px solid ${accent ? '#c0392b' : '#3a3a44'};background:${accent ? '#8e2b20' : '#22222a'};color:#eee;cursor:pointer;font:12.5px system-ui`;
-      b.onclick = () => { wrap.remove(); resolve(val); };
+      b.onclick = () => { wrap.remove(); restorePreview(); resolve(val); };
       return b;
     };
     row.append(mkBtn('Cancel', false, false), mkBtn(okLabel, true, true));
     card.append(p, row);
     wrap.append(card);
-    wrap.onclick = (e) => { if (e.target === wrap) { wrap.remove(); resolve(false); } };
+    wrap.onclick = (e) => { if (e.target === wrap) { wrap.remove(); restorePreview(); resolve(false); } };
     document.body.append(wrap);
   });
 }
@@ -2032,6 +2047,7 @@ Short list of everything. For detail see the [GitHub README](https://github.com/
 // browser via os_open (cmd start) — no opener plugin needed.
 async function showAbout() {
   const ver = await getVersion().catch(() => '?');
+  const restorePreview = hidePreviewForOverlay();
   const wrap = document.createElement('div');
   wrap.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.55);display:flex;align-items:center;justify-content:center;z-index:9999';
   const link = (label, url) =>
@@ -2112,9 +2128,10 @@ async function showAbout() {
   };
   card.querySelector('#ab-feat').onclick = () => togglePanel('feat', marked.parse(FEATURES_MD));
   card.querySelector('#ab-log').onclick = () => togglePanel('log', marked.parse(changelogRaw));
-  wrap.onclick = (e) => { if (e.target === wrap) wrap.remove(); };
+  const close = () => { wrap.remove(); restorePreview(); };
+  wrap.onclick = (e) => { if (e.target === wrap) close(); };
   window.addEventListener('keydown', function onKey(e) {
-    if (e.key === 'Escape') { wrap.remove(); window.removeEventListener('keydown', onKey); }
+    if (e.key === 'Escape') { close(); window.removeEventListener('keydown', onKey); }
   });
   wrap.append(card);
   document.body.append(wrap);
