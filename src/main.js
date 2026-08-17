@@ -19,7 +19,7 @@ import changelogRaw from '../CHANGELOG.md?raw';
 import '@xterm/xterm/css/xterm.css';
 
 const MAX_SESSIONS = 10;
-const trace = (m) => { try { invoke('bench_report', { line: `[ui] ${m}` }); } catch {} };
+const trace = (m) => { try { invoke('bench_report', { line: `[ui ${new Date().toISOString().slice(11, 23)}] ${m}` }); } catch {} };
 window.addEventListener('error', (e) => trace(`ERROR ${e.message} @ ${e.filename}:${e.lineno}`));
 window.addEventListener('unhandledrejection', (e) =>
   trace(`REJECT ${e.reason && e.reason.message ? e.reason.message : e.reason}`));
@@ -219,6 +219,8 @@ function wireClipboard(term, box) {
   box.addEventListener('paste', (ev) => swallow(ev, 'paste'), true);
   box.addEventListener('beforeinput', (ev) => {
     if (pasteTypes.has(ev.inputType)) swallow(ev, 'beforeinput');
+    else if (Date.now() - pasteDone < 5000 && (ev.data || '').length > 1)
+      trace(`multi-char beforeinput passed through (type=${ev.inputType} len=${ev.data.length})`);
   }, true);
   // textInput has no inputType so it can't be told apart from IME/emoji-panel
   // input by shape — only swallow it in the few seconds after one of our own
@@ -243,6 +245,32 @@ function wireClipboard(term, box) {
 const quotePath = (p) => (p.includes(' ') ? `"${p}"` : p);
 let pasteBusy = false;
 let pasteDone = 0;
+
+// v0.18.4 — kill the right-click duplicate at the LAST hop instead of guessing
+// DOM paths. The v0.18.3 traps (paste/beforeinput/textInput/input) never fired:
+// the log showed one clean "paste via contextmenu" and the text still landed
+// twice, so WebView2's replay reaches xterm without touching any of those
+// events. Every byte headed to the pty goes through term.onData, so dedup
+// there: each term.paste() arms its payload as expected-once; an identical
+// multi-char chunk arriving again within 3s is the replay and gets dropped.
+// Compare on xterm's paste normalization (\r\n -> \r) and ignore bracketed
+// paste wrappers so it matches whichever form the replay takes.
+const pasteNorm = (t) => t.replace(/\r?\n/g, '\r');
+const BRACKETED = /^\x1b\[200~([\s\S]*)\x1b\[201~$/;
+let expectPaste = { text: '', allowed: 0, at: 0 };
+function armPaste(text) {
+  const t = pasteNorm(text);
+  if (expectPaste.text === t && Date.now() - expectPaste.at < 3000) expectPaste.allowed++;
+  else expectPaste = { text: t, allowed: 1, at: Date.now() };
+}
+function guardData(d) {
+  if (d.length < 2 || Date.now() - expectPaste.at > 3000) return d;
+  const core = pasteNorm((BRACKETED.exec(d) || [, d])[1]);
+  if (core !== expectPaste.text) return d;
+  if (expectPaste.allowed > 0) { expectPaste.allowed--; return d; }
+  trace(`dropped duplicate paste at onData (${d.length}B)`);
+  return null;
+}
 async function smartPaste(term, src = '?') {
   if (pasteBusy || Date.now() - pasteDone < 250) { trace(`paste via ${src} skipped (busy/cooldown)`); return; }
   trace(`paste via ${src}`);
@@ -260,10 +288,11 @@ async function smartPaste(term, src = '?') {
 // plain paste lagged a second; readText() returns right away, so only an actual
 // image pays the read() cost now.
 async function doPaste(term) {
+  const put = (x) => { armPaste(x); term.paste(x); };
   const paths = await invoke('clip_paths').catch(() => []);
-  if (paths.length) { term.paste(paths.map(quotePath).join(' ') + ' '); return; }
+  if (paths.length) { put(paths.map(quotePath).join(' ') + ' '); return; }
   const t = await navigator.clipboard.readText().catch(() => '');
-  if (t) { term.paste(t); return; }
+  if (t) { put(t); return; }
   try {
     for (const item of await navigator.clipboard.read()) {
       const type = item.types.find((t) => t.startsWith('image/'));
@@ -277,6 +306,7 @@ async function doPaste(term) {
       });
       const ext = type.split('/')[1].replace('jpeg', 'jpg').replace('svg+xml', 'svg');
       const path = await invoke('save_paste', { name: `paste.${ext}`, b64 });
+      armPaste(quotePath(path) + ' ');
       term.paste(quotePath(path) + ' ');
       return;
     }
@@ -479,7 +509,7 @@ async function newSession(cwd, opts = {}) {
   }
   sessions.set(s.ptyId, s);
 
-  s.term.onData((d) => invoke('pty_write', { id: s.ptyId, data: d }));
+  s.term.onData((d) => { const g = guardData(d); if (g !== null) invoke('pty_write', { id: s.ptyId, data: g }); });
   wireClipboard(s.term, s.box);
 
   // A tab IS a Claude session: launch it once the shell has settled, with
@@ -1771,7 +1801,7 @@ async function spawnShell(s) {
   const opts = (cmd) => ({ cmd, args, cwd: s.cwd, cols: term.cols || 90, rows: term.rows || 14, onOutput });
   try { ptyId = await invoke('pty_spawn', opts('pwsh.exe')); }
   catch { ptyId = await invoke('pty_spawn', opts('powershell.exe')); }
-  term.onData((d) => invoke('pty_write', { id: ptyId, data: d }));
+  term.onData((d) => { const g = guardData(d); if (g !== null) invoke('pty_write', { id: ptyId, data: g }); });
   wireClipboard(term, box);
 
   const sh = { ptyId, term, fit, box, lastSize: '' };

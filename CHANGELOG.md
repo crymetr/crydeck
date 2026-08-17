@@ -3,6 +3,11 @@
 All notable changes to CryDeck. Format loosely follows Keep a Changelog;
 versions are git tags.
 
+## v0.18.4 - 2026-08-17
+
+### Fixed
+- **Right-click double paste, round 4 — dedup at the pty gate.** The v0.18.3 traps never fired: the log showed one clean `paste via contextmenu` and the text still landed twice, so the duplicate reaches xterm without touching any DOM paste/input event we can intercept. Instead of guessing the path, every paste now arms its exact payload as expected-once, and `term.onData` (the only door to the pty) drops an identical multi-char chunk arriving again within 3 seconds. Whatever route WebView2 replays the paste through, the copy dies at the last hop and the drop is traced to `crydeck.log`. Trace lines now carry timestamps.
+
 ## v0.18.3 - 2026-08-14
 
 ### Fixed
