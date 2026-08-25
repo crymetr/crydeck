@@ -2061,7 +2061,7 @@ boot();
 // stumble onto a feature. Rendered in the About card's Features panel. Keep it
 // in step with the changelog when a user-facing feature lands.
 const FEATURES_MD = `
-Short list of everything. For detail see the [GitHub README](https://github.com/saitaskar/crydeck#readme).
+Short list of everything. For detail see the [GitHub README](https://github.com/crymetr/crydeck#readme).
 
 **Sessions & setup**
 - Each tab is a Claude Code session in a folder; close and reopen and conversations resume.
@@ -2120,7 +2120,7 @@ async function showAbout() {
       <button id="ab-log" style="background:#22222a;border:1px solid #3a3a44;border-radius:5px;color:#ccc;padding:3px 9px;cursor:pointer;font:11.5px system-ui">Changelog</button>
     </div>
     <div style="display:flex;gap:14px;flex-wrap:wrap">
-      ${link('GitHub &amp; docs', 'https://github.com/saitaskar/crydeck#readme')}
+      ${link('GitHub &amp; docs', 'https://github.com/crymetr/crydeck#readme')}
       ${link('cryme.tr', 'https://cryme.tr')}
       ${link('☕ Buy me a coffee', 'https://cryme.tr/support')}
     </div>
@@ -2134,7 +2134,7 @@ async function showAbout() {
         ${hi('Steer sessions from your phone, and open new ones with the built-in <code>crydeck</code> command.')}
         ${hi('Hit a rate limit? Right-click a tab to auto-continue right after it resets.')}
       </ul>
-      <div style="margin-top:8px;font-size:11.5px;color:#8a8a94">Full list below, or the ${link('GitHub README', 'https://github.com/saitaskar/crydeck#readme')} for detail.</div>
+      <div style="margin-top:8px;font-size:11.5px;color:#8a8a94">Full list below, or the ${link('GitHub README', 'https://github.com/crymetr/crydeck#readme')} for detail.</div>
     </div>
     <label id="ab-autostart-row" style="display:flex;align-items:center;gap:8px;margin-top:12px;cursor:pointer">
       <input type="checkbox" id="ab-autostart" style="cursor:pointer">

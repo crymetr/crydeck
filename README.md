@@ -24,7 +24,7 @@ is the entire reason it stays light (~250MB working set, single small binary).
 ## Getting started (never used a terminal before? start here)
 
 1. **Download** `CryDeck_x64-setup.exe` from the
-   [latest release](https://github.com/saitaskar/crydeck/releases/latest) and
+   [latest release](https://github.com/crymetr/crydeck/releases/latest) and
    run it. Windows SmartScreen may warn about an unknown publisher — choose
    "More info" → "Run anyway".
 2. **First launch.** CryDeck checks your machine. If Git or Claude Code are
@@ -130,7 +130,7 @@ bash and PowerShell alike. The scars are documented in PLAN.md.
 
 ## Build from source (developers)
 
-Users should just grab the [installer](https://github.com/saitaskar/crydeck/releases/latest);
+Users should just grab the [installer](https://github.com/crymetr/crydeck/releases/latest);
 this is for hacking on CryDeck itself. Needs Rust (MSVC toolchain) + pnpm.
 
 ```powershell
