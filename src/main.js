@@ -43,40 +43,65 @@ let active = null;             // session or null
 // slash commands typed into it. Every id below was launched once and checked
 // against the session transcript, so none of them silently fall back to
 // another model. `m1` marks the ones that accept the [1m] long-context suffix
-// (Haiku does not).
+// (Haiku does not). Any other id can be typed into the "Custom" row; those
+// are passed through verbatim (with [1m] when toggled) and left to Claude
+// Code to validate.
+//
+// Two scopes: "all" writes the choice to localStorage (drives every new tab
+// and the live one), "session" stores it on the active session object only,
+// so other tabs and future tabs keep following the default.
 const MODELS = [
   { id: '', label: 'Default', note: 'from ~\\.claude\\settings.json' },
+  { id: 'claude-fable-5-1', label: 'Fable 5.1', m1: true },
+  { id: 'claude-fable-5', label: 'Fable 5', m1: true },
   { id: 'claude-opus-5', label: 'Opus 5', m1: true },
   { id: 'claude-opus-4-8', label: 'Opus 4.8', m1: true },
   { id: 'claude-sonnet-5', label: 'Sonnet 5', m1: true },
-  { id: 'claude-fable-5', label: 'Fable 5', m1: true },
   { id: 'claude-haiku-4-5', label: 'Haiku 4.5', m1: false },
 ];
 const EFFORTS = ['', 'low', 'medium', 'high', 'xhigh', 'max'];
 
-const prefModel = () => MODELS.find((m) => m.id === localStorage.getItem('cockpit.model')) || MODELS[0];
+// Resolve an id to a MODELS entry; unknown ids become a synthetic custom entry.
+function modelById(id) {
+  id = (id || '').trim();
+  const known = MODELS.find((m) => m.id === id);
+  if (known) return known;
+  const label = id.replace(/^claude-/, '').replace(/-(\d)/g, ' $1').replace(/(\d)-(\d)/g, '$1.$2')
+    .replace(/\b\w/g, (c) => c.toUpperCase());
+  return { id, label: label || id, m1: true, custom: true };
+}
+
+// Global (all-sessions) preferences, in localStorage.
+const prefModel = () => modelById(localStorage.getItem('cockpit.model'));
 const prefEffort = () => {
   const e = localStorage.getItem('cockpit.effort') || '';
   return EFFORTS.includes(e) ? e : '';
 };
 const pref1m = () => localStorage.getItem('cockpit.model1m') === '1';
+const prefScope = () => (localStorage.getItem('cockpit.modelScope') === 'session' ? 'session' : 'all');
+
+// Effective values for a session: its own override when set, else the global.
+const sessModel = (s) => (s && s.model != null ? modelById(s.model) : prefModel());
+const sessEffort = (s) => (s && s.effort != null ? s.effort : prefEffort());
+const sess1m = (s) => (s && s.model1m != null ? s.model1m : pref1m());
+const sessHasOverride = (s) => !!s && (s.model != null || s.effort != null || s.model1m != null);
 
 // The exact --model / /model argument: id plus the [1m] suffix when the model
 // supports it and the toggle is on.
-function modelArg() {
-  const m = prefModel();
-  return m.id && m.m1 && pref1m() ? `${m.id}[1m]` : m.id;
+function modelArgFor(m, one) {
+  return m.id && m.m1 && one ? `${m.id}[1m]` : m.id;
 }
 
+// New tabs always launch with the global preference.
 function launchFlags() {
-  const m = modelArg(), e = prefEffort();
+  const m = modelArgFor(prefModel(), pref1m()), e = prefEffort();
   return (m ? `--model "${m}" ` : '') + (e ? `--effort ${e} ` : '');
 }
 
 function modelBtnLabel() {
-  const m = prefModel(), e = prefEffort();
-  const one = m.id && m.m1 && pref1m() ? ' 1M' : '';
-  return `${m.label}${one}${e ? ' · ' + e : ''}`;
+  const m = sessModel(active), e = sessEffort(active);
+  const one = m.id && m.m1 && sess1m(active) ? ' 1M' : '';
+  return `${sessHasOverride(active) ? '⌖ ' : ''}${m.label}${one}${e ? ' · ' + e : ''}`;
 }
 
 // Type a slash command into the live session. Default (empty) selections have
@@ -87,7 +112,12 @@ function typeToActive(cmd) {
 
 function paintModelBtn() {
   const b = $('modelbtn');
-  if (b) b.textContent = modelBtnLabel();
+  if (b) {
+    b.textContent = modelBtnLabel();
+    b.title = sessHasOverride(active)
+      ? 'This session overrides the default model/effort'
+      : 'Model and effort for Claude';
+  }
 }
 
 function showModelMenu(btn) {
@@ -100,36 +130,102 @@ function showModelMenu(btn) {
 
   const paint = () => {
     panel.innerHTML = '';
+    const scope = prefScope();
+    const sessionScope = scope === 'session' && !!active;
     const sec = (t) => {
       const h = document.createElement('div');
       h.className = 'mm-h';
       h.textContent = t;
       panel.appendChild(h);
     };
+    const curModel = () => (sessionScope ? sessModel(active) : prefModel());
+    const cur1m = () => (sessionScope ? sess1m(active) : pref1m());
+    const curEffort = () => (sessionScope ? sessEffort(active) : prefEffort());
+
+    // Write a choice into the chosen scope and push it to the live tab.
+    // Choosing in "all" scope also clears the active tab's override, so what
+    // you just picked is what that tab runs.
+    const setModel = (id) => {
+      if (sessionScope) active.model = id;
+      else { localStorage.setItem('cockpit.model', id); if (active) { delete active.model; delete active.model1m; } }
+      if (id) typeToActive(`/model ${modelArgFor(modelById(id), cur1m())}`);
+      paintModelBtn(); paint();
+    };
+    const set1m = (on) => {
+      if (sessionScope) active.model1m = on;
+      else { localStorage.setItem('cockpit.model1m', on ? '1' : ''); if (active) delete active.model1m; }
+      if (curModel().id) typeToActive(`/model ${modelArgFor(curModel(), on)}`);
+      paintModelBtn(); paint();
+    };
+    const setEffort = (e) => {
+      if (sessionScope) active.effort = e;
+      else { localStorage.setItem('cockpit.effort', e); if (active) delete active.effort; }
+      if (e) typeToActive(`/effort ${e}`);
+      paintModelBtn(); paint();
+    };
+
+    sec('Apply to');
+    const sc = document.createElement('div');
+    sc.className = 'mm-chips';
+    for (const [k, t] of [['all', 'all sessions'], ['session', 'this session only']]) {
+      const c = document.createElement('button');
+      c.className = 'mm-chip' + (scope === k ? ' on' : '');
+      c.textContent = t;
+      if (k === 'session' && !active) { c.disabled = true; c.title = 'No active session'; }
+      c.onclick = () => { localStorage.setItem('cockpit.modelScope', k); paint(); };
+      sc.appendChild(c);
+    }
+    panel.appendChild(sc);
 
     sec('Model');
-    for (const m of MODELS) {
+    if (sessionScope && sessHasOverride(active)) {
       const row = document.createElement('div');
-      row.className = 'mm-row' + (m.id === prefModel().id ? ' on' : '');
-      row.innerHTML = `<span class="mm-tick">${m.id === prefModel().id ? '✓' : ''}</span>` +
-        `<span>${esc(m.label)}</span>` + (m.note ? `<span class="mm-note">${esc(m.note)}</span>` : '');
+      row.className = 'mm-row';
+      row.innerHTML = `<span class="mm-tick"></span><span>Follow default</span>` +
+        `<span class="mm-note">${esc(prefModel().label)}</span>`;
       row.onclick = () => {
-        localStorage.setItem('cockpit.model', m.id);
-        if (m.id) typeToActive(`/model ${modelArg()}`);
+        delete active.model; delete active.model1m; delete active.effort;
+        const m = modelArgFor(prefModel(), pref1m());
+        if (m) typeToActive(`/model ${m}`);
+        if (prefEffort()) typeToActive(`/effort ${prefEffort()}`);
         paintModelBtn(); paint();
       };
       panel.appendChild(row);
     }
+    const cm = curModel();
+    const list = cm.custom ? [...MODELS, cm] : MODELS;
+    for (const m of list) {
+      const row = document.createElement('div');
+      row.className = 'mm-row' + (m.id === cm.id ? ' on' : '');
+      row.innerHTML = `<span class="mm-tick">${m.id === cm.id ? '✓' : ''}</span>` +
+        `<span>${esc(m.label)}</span>` + (m.note ? `<span class="mm-note">${esc(m.note)}</span>` : '') +
+        (m.custom ? `<span class="mm-note">${esc(m.id)}</span>` : '');
+      row.onclick = () => setModel(m.id);
+      panel.appendChild(row);
+    }
+
+    // Free-text id for models not in the list yet (a model released after
+    // this build, for instance). Enter applies it.
+    const custom = document.createElement('div');
+    custom.className = 'mm-row mm-custom';
+    const inp = document.createElement('input');
+    inp.className = 'mm-input';
+    inp.placeholder = 'custom id, e.g. claude-fable-5-2';
+    inp.spellcheck = false;
+    inp.onkeydown = (e) => {
+      e.stopPropagation();
+      if (e.key === 'Enter') { const v = inp.value.trim(); if (v) setModel(v); }
+      if (e.key === 'Escape') { inp.value = ''; inp.blur(); }
+    };
+    custom.onclick = () => inp.focus();
+    custom.appendChild(inp);
+    panel.appendChild(custom);
 
     const one = document.createElement('div');
-    one.className = 'mm-row' + (pref1m() ? ' on' : '') + (prefModel().m1 ? '' : ' off');
-    one.innerHTML = `<span class="mm-tick">${pref1m() ? '✓' : ''}</span><span>1M context</span>` +
-      (prefModel().m1 ? '' : '<span class="mm-note">not on this model</span>');
-    one.onclick = () => {
-      localStorage.setItem('cockpit.model1m', pref1m() ? '' : '1');
-      if (prefModel().id) typeToActive(`/model ${modelArg()}`);
-      paintModelBtn(); paint();
-    };
+    one.className = 'mm-row' + (cur1m() ? ' on' : '') + (cm.m1 ? '' : ' off');
+    one.innerHTML = `<span class="mm-tick">${cur1m() ? '✓' : ''}</span><span>1M context</span>` +
+      (cm.m1 ? '' : '<span class="mm-note">not on this model</span>');
+    one.onclick = () => set1m(!cur1m());
     panel.appendChild(one);
 
     sec('Effort');
@@ -137,21 +233,19 @@ function showModelMenu(btn) {
     chips.className = 'mm-chips';
     for (const e of EFFORTS) {
       const c = document.createElement('button');
-      c.className = 'mm-chip' + (e === prefEffort() ? ' on' : '');
+      c.className = 'mm-chip' + (e === curEffort() ? ' on' : '');
       c.textContent = e || 'default';
-      c.onclick = () => {
-        localStorage.setItem('cockpit.effort', e);
-        if (e) typeToActive(`/effort ${e}`);
-        paintModelBtn(); paint();
-      };
+      c.onclick = () => setEffort(e);
       chips.appendChild(c);
     }
     panel.appendChild(chips);
 
     const foot = document.createElement('div');
     foot.className = 'mm-foot';
-    foot.textContent = 'Applies to the active session now, and to every new session. ' +
-      'Default only takes effect on the next session.';
+    foot.textContent = sessionScope
+      ? 'Applies to the active session only. Other tabs and new sessions keep the default.'
+      : 'Applies to the active session now, and to every new session. ' +
+        'Default only takes effect on the next session.';
     panel.appendChild(foot);
   };
 
@@ -597,6 +691,7 @@ function closeSession(s) {
 
 function activate(s) {
   active = s;
+  paintModelBtn();
   for (const o of sessions.values()) {
     o.box.classList.toggle('active', o === s);
     o.tabEl?.classList.toggle('active', o === s);
@@ -2074,7 +2169,7 @@ Short list of everything. For detail see the [GitHub README](https://github.com/
 - Tab dot: blue working, amber done, red waiting on you, none idle.
 - Desktop notification when a background session finishes or needs you.
 - Status bar: model, effort, context %, rate limits, session cost.
-- Model & effort picker (top right): switches the active session right away and every new one after it.
+- Model & effort picker (top right): switches the active session right away and every new one after it, or only this tab ("this session only"). Type any model id into the custom row.
 - Auto-continue after a rate limit: right-click a tab to schedule it.
 
 **The file tree & preview**

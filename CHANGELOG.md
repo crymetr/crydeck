@@ -3,6 +3,13 @@
 All notable changes to CryDeck. Format loosely follows Keep a Changelog;
 versions are git tags.
 
+## v0.19.0 - 2026-09-02
+
+### Added
+- **Per-session model and effort.** The picker now has an "Apply to" switch: *all sessions* (the old behaviour, saved as the default for new tabs) or *this session only*, which changes just the active tab and leaves every other tab and every new tab on the default. An overridden tab shows a ⌖ mark on the picker button, and a "Follow default" row puts it back.
+- **Custom model id.** Type any id (e.g. a model released after this build) into the new input row and press Enter. It is passed to `--model` / `/model` verbatim, with `[1m]` when the toggle is on.
+- **Fable 5.1** (`claude-fable-5-1`) in the model list.
+
 ## v0.18.4 - 2026-08-17
 
 ### Fixed
