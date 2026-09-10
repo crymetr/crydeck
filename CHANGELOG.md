@@ -3,6 +3,15 @@
 All notable changes to CryDeck. Format loosely follows Keep a Changelog;
 versions are git tags.
 
+## v0.20.0 - 2026-09-10
+
+### Added
+- **Split view.** Watch two sessions side by side: right-click a tab → *Split right* pins it beside the focused one, click either pane to move focus (the tree, preview and model picker follow the focused pane), right-click → *Unsplit* to collapse. Each pane types into its own session.
+
+### Fixed
+- **Model / effort picker did nothing mid-session.** Picking a model typed `/model <id>\r` into the session as one burst; the trailing Enter raced Claude's slash-command palette and selected a suggestion instead of submitting the line, so the model never changed. The text and the Enter are now sent as two keystrokes, so `/model` and `/effort` land. Same fix applies to auto-continue and seeded prompts.
+- **Remote Control always showed the folder name ("dev") in the Claude app.** Sessions launched with the folder basename as a fixed Remote Control name, which pins it forever. The name is no longer forced, so Claude auto-names the session and updates it to reflect your first prompt, matching the topic instead of the folder. (The local tab title already tracks the live conversation topic.)
+
 ## v0.19.0 - 2026-09-02
 
 ### Added

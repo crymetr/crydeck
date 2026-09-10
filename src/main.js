@@ -106,8 +106,20 @@ function modelBtnLabel() {
 
 // Type a slash command into the live session. Default (empty) selections have
 // no in-session equivalent, so they only take effect on the next tab.
+// Submit a line into a Claude TUI reliably: send the text, then send Enter as a
+// separate keystroke a beat later. A single write that ends in \r races Claude's
+// slash-command palette — the whole burst lands before the palette settles and
+// the \r selects the palette suggestion instead of submitting the typed line, so
+// /model and /effort silently did nothing. Splitting the Enter off fixes it.
+// Plain lines (continue, seeds) get the same treatment; it is harmless for them.
+function submitToPty(id, text) {
+  if (!id) return;
+  invoke('pty_write', { id, data: text }).catch(() => {});
+  setTimeout(() => invoke('pty_write', { id, data: '\r' }).catch(() => {}), 120);
+}
+
 function typeToActive(cmd) {
-  if (active?.ptyId) invoke('pty_write', { id: active.ptyId, data: `${cmd}\r` }).catch(() => {});
+  if (active?.ptyId) submitToPty(active.ptyId, cmd);
 }
 
 function paintModelBtn() {
@@ -605,6 +617,8 @@ async function newSession(cwd, opts = {}) {
 
   s.term.onData((d) => { const g = guardData(d); if (g !== null) invoke('pty_write', { id: s.ptyId, data: g }); });
   wireClipboard(s.term, s.box);
+  // Clicking either pane in a split moves focus (tree/preview/model follow it).
+  s.box.addEventListener('mousedown', () => { if (inPanes(s) && active !== s) focusPane(s); }, true);
 
   // A tab IS a Claude session: launch it once the shell has settled, with
   // Remote Control on so the phone can pick any session up. Closing the app
@@ -621,7 +635,12 @@ async function newSession(cwd, opts = {}) {
   const resume = sid ? `--resume ${sid} ` : (opts.resume ? '--continue ' : '');
   setTimeout(() => {
     if (!sessions.has(s.ptyId)) return;
-    const launch = `claude ${resume}${launchFlags()}--remote-control "${basename(cwd)}"`;
+    // Remote Control on, but no forced name: passing the folder basename pinned
+    // every session in the Claude app to "dev" forever. With no name, Claude
+    // auto-generates one and then updates it to reflect the first prompt, so the
+    // app shows the actual topic instead of the folder. (The local tab title
+    // still tracks the live OSC topic via onTitleChange below.)
+    const launch = `claude ${resume}${launchFlags()}--remote-control`;
     if (opts.setup) {
       // First run with missing prerequisites: install them right here in the
       // tab, refresh PATH so this same shell sees the new binaries, then fall
@@ -640,7 +659,7 @@ async function newSession(cwd, opts = {}) {
       if (opts.seed) {
         const seed = opts.seed;
         setTimeout(() => {
-          if (sessions.has(s.ptyId)) invoke('pty_write', { id: s.ptyId, data: `${seed}\r` });
+          if (sessions.has(s.ptyId)) submitToPty(s.ptyId, seed);
         }, 6000);
       }
     }
@@ -680,7 +699,14 @@ function closeSession(s) {
   s.box.remove();
   s.tabEl.remove();
   s.tree.el.remove();
-  if (active === s) {
+  const wasFocused = active === s;
+  const wasPane = panes.includes(s.ptyId);
+  panes = panes.filter((id) => id !== s.ptyId);
+  if (wasPane && panes.length) {
+    // A split partner is still open: keep it, moving focus there if needed.
+    if (wasFocused) active = sessions.get(panes[0]);
+    renderPanes();
+  } else if (wasFocused) {
     active = null;
     const rest = [...sessions.values()];
     if (rest.length) activate(rest[rest.length - 1]);
@@ -689,39 +715,86 @@ function closeSession(s) {
   persistTabs();
 }
 
+// Split view: `panes` holds the 1 or 2 sessions shown side by side (left→right
+// by ptyId); `active` is the focused one (tree, preview and the model picker all
+// follow it). One pane is the normal case; a second is pinned with "Split right".
+let panes = [];
+const paneSessions = () => panes.map((id) => sessions.get(id)).filter(Boolean);
+const inPanes = (s) => !!s && panes.includes(s.ptyId);
+
+// Tab click / programmatic focus. If the tab is already one of the split panes,
+// just move focus to it and keep the split; otherwise it replaces the view as a
+// single pane (switching to an unrelated tab collapses the split, as expected).
 function activate(s) {
+  if (!s) return;
+  if (inPanes(s)) { focusPane(s); return; }
+  panes = [s.ptyId];
   active = s;
+  renderPanes();
+}
+
+// Move focus between the two live panes without changing which two are shown.
+function focusPane(s) {
+  if (!s) return;
+  active = s;
+  renderPanes();
+}
+
+// Pin `target` as the right pane beside the currently focused session.
+function splitRight(target) {
+  if (!active || !target || target === active) return;
+  panes = [active.ptyId, target.ptyId];
+  renderPanes();          // focus stays on the left (active) pane
+}
+
+function unsplit() {
+  if (!active) return;
+  panes = [active.ptyId];
+  renderPanes();
+}
+
+function renderPanes() {
+  const s = active;
   paintModelBtn();
+  const split = panes.length > 1;
+  const shown = new Set(panes);
+  $('termhost').classList.toggle('split', split);
+  document.getElementById('app')?.classList.toggle('split', split);
   for (const o of sessions.values()) {
-    o.box.classList.toggle('active', o === s);
-    o.tabEl?.classList.toggle('active', o === s);
+    const vis = shown.has(o.ptyId);
+    o.box.classList.toggle('active', vis);
+    o.box.classList.toggle('pane', vis && split);
+    o.box.classList.toggle('focused', split && o === s);
+    o.tabEl?.classList.toggle('active', vis);
+    o.tabEl?.classList.toggle('focused', o === s);
     if (o === s) { o.tabEl?.classList.remove('busy', 'attn', 'blocked'); o.notified = false; }
     o.tree.el.style.display = o === s ? '' : 'none';
     if (o !== s) invoke('preview_visible', { tab: o.ptyId, visible: false, rect: null }).catch(() => {});
   }
   $('empty')?.remove();
   if (s.treeDirty) { s.treeDirty = false; s.tree.refresh(); }
-  requestAnimationFrame(() => { fitActive(); s.term.focus(); });
+  requestAnimationFrame(() => { fitPanes(); s.term.focus(); });
   setPvMode(s.pvMode, true);
   renderShells(s);
   reviewChanged(s);
   renderStatus();
 }
 
-function fitActive() {
-  if (!active) return;
-  active.fit.fit();
-  // Force a repaint: resizes occasionally leave the canvas blank otherwise.
-  active.term.refresh(0, Math.max(0, active.term.rows - 1));
-  const { cols, rows } = active.term;
-  if (cols < 2 || rows < 2) return;
-  const key = `${cols}x${rows}`;
-  if (key === active.lastSize) return;
-  active.lastSize = key;
-  invoke('pty_resize', { id: active.ptyId, cols, rows });
+function fitPanes() {
+  for (const o of paneSessions()) {
+    o.fit.fit();
+    // Force a repaint: resizes occasionally leave the canvas blank otherwise.
+    o.term.refresh(0, Math.max(0, o.term.rows - 1));
+    const { cols, rows } = o.term;
+    if (cols < 2 || rows < 2) continue;
+    const key = `${cols}x${rows}`;
+    if (key === o.lastSize) continue;
+    o.lastSize = key;
+    invoke('pty_resize', { id: o.ptyId, cols, rows });
+  }
 }
 let resizeTimer = null;
-const scheduleResize = () => { clearTimeout(resizeTimer); resizeTimer = setTimeout(fitActive, 40); };
+const scheduleResize = () => { clearTimeout(resizeTimer); resizeTimer = setTimeout(fitPanes, 40); };
 new ResizeObserver(scheduleResize).observe($('termhost'));
 window.addEventListener('resize', scheduleResize);
 
@@ -736,6 +809,8 @@ function makeTab(s) {
   el.oncontextmenu = (ev) => {
     ev.preventDefault();
     const items = [];
+    if (panes.length > 1) items.push(['Unsplit', () => unsplit()]);
+    else if (active && s !== active) items.push(['Split right (beside current)', () => splitRight(s)]);
     const resetsAt = parseResetsAt(s);
     if (resetsAt && resetsAt > Date.now())
       items.push([`Auto-continue at limit reset (${new Date(resetsAt + 60000).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' })})`,
@@ -787,7 +862,7 @@ function setAutoCont(s, at) {
     at,
     timer: setTimeout(() => {
       if (!sessions.has(s.ptyId)) return;
-      invoke('pty_write', { id: s.ptyId, data: 'continue\r' });
+      submitToPty(s.ptyId, 'continue');
       trace(`auto-continue fired for session ${s.ptyId}`);
       s.autoCont = null;
       s.tabEl?.classList.remove('sched');
@@ -2162,6 +2237,7 @@ Short list of everything. For detail see the [GitHub README](https://github.com/
 - Each tab is a Claude Code session in a folder; close and reopen and conversations resume.
 - Fresh PC: first run installs PowerShell 7, Git, and Claude Code, then logs you in.
 - Up to 10 sessions, plus up to 3 extra plain terminals under each.
+- Split view: right-click a tab → "Split right" to watch two sessions side by side; click a pane to focus it (tree, preview and the model picker follow), right-click → "Unsplit" to collapse.
 - Starts with Windows (toggle above) and auto-updates itself.
 - New version while you work: an amber ↑ pill appears in the tab bar (checked every 10 minutes, no popup). Click it when you are ready — installing restarts CryDeck.
 
