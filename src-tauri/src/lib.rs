@@ -40,6 +40,7 @@ pub fn run() {
       fs::open_in_editor,
       fs::prompts_load,
       fs::prompts_save,
+      fs::set_output_style,
       fs::clip_paths,
       fs::save_paste,
       fs::code_blocks,

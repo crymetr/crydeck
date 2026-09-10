@@ -122,6 +122,23 @@ function typeToActive(cmd) {
   if (active?.ptyId) submitToPty(active.ptyId, cmd);
 }
 
+// Output styles (built-ins). Applied by writing outputStyle into the focused
+// session's .claude/settings.local.json; Claude picks it up from the next message.
+const OUTPUT_STYLES = ['Default', 'Proactive', 'Concise', 'Explanatory', 'Learning'];
+function setOutputStyle(name) {
+  if (!active) return;
+  active.outputStyle = name;
+  invoke('set_output_style', { cwd: active.cwd, style: name })
+    .then(() => trace(`output style → ${name} (${active.cwd}); applies from your next message`))
+    .catch((e) => trace(`output style failed: ${e}`));
+}
+function showStyleMenu(ev) {
+  const cur = active.outputStyle || 'Default';
+  contextMenu(ev, OUTPUT_STYLES.map((name) => [
+    (name === cur ? '✓ ' : '   ') + name, () => setOutputStyle(name),
+  ]));
+}
+
 function paintModelBtn() {
   const b = $('modelbtn');
   if (b) {
@@ -2186,6 +2203,16 @@ async function boot() {
   df.title = 'Review the focused session’s uncommitted changes (/diff)';
   df.onclick = () => { if (active) typeToActive('/diff'); };
   $('tabs').appendChild(df);
+
+  // Output style for the focused session. /output-style was removed from the
+  // CLI, so this writes the `outputStyle` field into the folder's
+  // .claude/settings.local.json (Claude applies it from the next message).
+  const st = document.createElement('button');
+  st.id = 'stylebtn';
+  st.textContent = 'style';
+  st.title = 'Output style for the focused session (writes .claude/settings.local.json)';
+  st.onclick = (ev) => { if (active) showStyleMenu(ev); };
+  $('tabs').appendChild(st);
 
   const ab = document.createElement('button');
   ab.id = 'about-btn';

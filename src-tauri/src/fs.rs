@@ -372,6 +372,32 @@ pub fn prompts_save(json: String) -> Result<(), String> {
     std::fs::write(prompts_file(), json).map_err(|e| e.to_string())
 }
 
+/// The one deliberate workspace write. `/output-style` was removed from the CLI
+/// (v2.1.91), so the only way to switch a session's output style is the
+/// `outputStyle` field in `<cwd>/.claude/settings.local.json`, which Claude
+/// Code reads live and applies from the next message. We merge into any existing
+/// file so we never clobber the user's other local settings. An empty or
+/// "Default" style removes the key, falling back to Claude Code's default.
+#[tauri::command]
+pub fn set_output_style(cwd: String, style: String) -> Result<(), String> {
+    let dir = Path::new(&cwd).join(".claude");
+    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    let path = dir.join("settings.local.json");
+    let mut root = std::fs::read_to_string(&path)
+        .ok()
+        .and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok())
+        .filter(|v| v.is_object())
+        .unwrap_or_else(|| serde_json::json!({}));
+    let obj = root.as_object_mut().ok_or("settings root is not an object")?;
+    if style.is_empty() || style == "Default" {
+        obj.remove("outputStyle");
+    } else {
+        obj.insert("outputStyle".into(), serde_json::Value::String(style));
+    }
+    let text = serde_json::to_string_pretty(&root).map_err(|e| e.to_string())?;
+    std::fs::write(&path, text).map_err(|e| e.to_string())
+}
+
 /// Explorer-copied files on the clipboard (CF_HDROP), so Ctrl+V in a terminal
 /// can paste their paths instead of nothing. Empty when the clipboard holds
 /// text or an image.
