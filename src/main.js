@@ -112,14 +112,26 @@ function modelBtnLabel() {
 // the \r selects the palette suggestion instead of submitting the typed line, so
 // /model and /effort silently did nothing. Splitting the Enter off fixes it.
 // Plain lines (continue, seeds) get the same treatment; it is harmless for them.
+// Serialize per pty: two submits fired back to back (e.g. "Follow default"
+// sends /model then /effort) must not interleave into "/model X/effort Y\r\r".
+// Each command's text+Enter fully lands before the next one's text goes out.
+const _submitQ = new Map(); // ptyId -> tail promise
 function submitToPty(id, text) {
-  if (!id) return;
-  invoke('pty_write', { id, data: text }).catch(() => {});
-  setTimeout(() => invoke('pty_write', { id, data: '\r' }).catch(() => {}), 120);
+  if (id == null) return;   // ptyId 0 is valid — the first session gets id 0
+  const prev = _submitQ.get(id) || Promise.resolve();
+  const next = prev.then(() => new Promise((res) => {
+    if (!sessions.has(id)) return res();       // tab closed before its turn
+    invoke('pty_write', { id, data: text }).catch(() => {});
+    setTimeout(() => {
+      if (sessions.has(id)) invoke('pty_write', { id, data: '\r' }).catch(() => {});
+      setTimeout(res, 80);
+    }, 120);
+  }));
+  _submitQ.set(id, next.catch(() => {}));
 }
 
 function typeToActive(cmd) {
-  if (active?.ptyId) { trace(`typeToActive → ${JSON.stringify(cmd)}`); submitToPty(active.ptyId, cmd); }
+  if (active?.ptyId != null) { trace(`typeToActive → ${JSON.stringify(cmd)}`); submitToPty(active.ptyId, cmd); }
 }
 
 // Output styles (built-ins). Applied by writing outputStyle into the focused
@@ -690,9 +702,9 @@ async function newSession(cwd, opts = {}) {
   s.term.onTitleChange((t) => {
     if (!s.tabEl) return;
     // Claude Code prefixes the terminal title with its working spinner (a run of
-    // ✳/✽ characters), so the raw title flickers frame by frame. Strip the
-    // leading spinner + whitespace so the tab shows the clean name/topic.
-    const clean = (t || '').replace(/^[\s✳✻✽✼✾❋*·•]+/u, '').trim();
+    // ✳/✽ glyphs), so the raw title flickers frame by frame. Strip only that
+    // spinner family + whitespace — not ASCII * · • which can be real title text.
+    const clean = (t || '').replace(/^[\s✳✻✽✼✾❋]+/u, '').trim();
     const name = clean || basename(s.cwd);
     s.tabEl.querySelector('.name').textContent = name;
     s.tabEl.title = `${s.cwd}\n${name}`;
@@ -757,6 +769,7 @@ function activate(s) {
 // Move focus between the two live panes without changing which two are shown.
 function focusPane(s) {
   if (!s) return;
+  if (active === s) { s.term.focus(); return; }   // already focused: no full re-render
   active = s;
   renderPanes();
 }
@@ -786,6 +799,11 @@ function renderPanes() {
     o.box.classList.toggle('active', vis);
     o.box.classList.toggle('pane', vis && split);
     o.box.classList.toggle('focused', split && o === s);
+    // Flex order + divider follow panes[] (left→right), not DOM creation order,
+    // so "Split right" always lands the target on the right.
+    const idx = split ? panes.indexOf(o.ptyId) : -1;
+    o.box.style.order = idx >= 0 ? String(idx) : '';
+    o.box.style.borderLeft = idx === 1 ? '1px solid var(--line)' : '';
     o.tabEl?.classList.toggle('active', vis);
     o.tabEl?.classList.toggle('focused', o === s);
     if (o === s) { o.tabEl?.classList.remove('busy', 'attn', 'blocked'); o.notified = false; }
@@ -794,11 +812,14 @@ function renderPanes() {
   }
   $('empty')?.remove();
   if (s.treeDirty) { s.treeDirty = false; s.tree.refresh(); }
-  requestAnimationFrame(() => { fitPanes(); s.term.focus(); });
   setPvMode(s.pvMode, true);
   renderShells(s);
   reviewChanged(s);
   renderStatus();
+  // Focus the Claude pane last: renderShells queues its own focus rAF when an
+  // extra shell is open, and whichever is queued later wins — so this must come
+  // after it, or clicking a pane would drop your typing into that shell.
+  requestAnimationFrame(() => { fitPanes(); s.term.focus(); });
 }
 
 function fitPanes() {
@@ -2062,14 +2083,14 @@ function contextMenu(ev, items) {
   m.id = 'ctxmenu';
   m.style.cssText = `position:fixed;left:${ev.clientX}px;top:${ev.clientY}px;z-index:99;` +
     'background:#1c1c24;border:1px solid #35353f;border-radius:6px;padding:3px;min-width:150px;' +
-    'box-shadow:0 6px 20px rgba(0,0,0,.5)';
+    'max-height:90vh;overflow-y:auto;box-shadow:0 6px 20px rgba(0,0,0,.5)';
   for (const [label, fn] of items) {
     const it = document.createElement('div');
     it.textContent = label;
     it.style.cssText = 'padding:5px 12px;border-radius:4px;cursor:pointer';
     it.onmouseenter = () => (it.style.background = '#24304a');
     it.onmouseleave = () => (it.style.background = '');
-    it.onclick = () => { m.remove(); fn(); };
+    it.onclick = () => { kill(); fn(); };
     m.appendChild(it);
   }
   document.body.appendChild(m);
@@ -2078,12 +2099,17 @@ function contextMenu(ev, items) {
   const r = m.getBoundingClientRect();
   if (r.right > window.innerWidth - 6) m.style.left = `${Math.max(6, window.innerWidth - r.width - 6)}px`;
   if (r.bottom > window.innerHeight - 6) m.style.top = `${Math.max(6, window.innerHeight - r.height - 6)}px`;
-  const kill = () => { m.remove(); window.removeEventListener('pointerdown', onDown, true); };
+  // kill() must drop BOTH listeners: closing via click-outside used to leave the
+  // keydown handler (and the detached menu in its closure) alive until Escape.
+  const kill = () => {
+    m.remove();
+    window.removeEventListener('pointerdown', onDown, true);
+    window.removeEventListener('keydown', onKey);
+  };
   const onDown = (e) => { if (!m.contains(e.target)) kill(); };
+  const onKey = (e) => { if (e.key === 'Escape') kill(); };
   window.addEventListener('pointerdown', onDown, true);
-  window.addEventListener('keydown', function onKey(e) {
-    if (e.key === 'Escape') { kill(); window.removeEventListener('keydown', onKey); }
-  });
+  window.addEventListener('keydown', onKey);
 }
 
 function fmtBytes(n) {

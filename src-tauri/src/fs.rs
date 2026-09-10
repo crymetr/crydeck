@@ -383,11 +383,25 @@ pub fn set_output_style(cwd: String, style: String) -> Result<(), String> {
     let dir = Path::new(&cwd).join(".claude");
     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
     let path = dir.join("settings.local.json");
-    let mut root = std::fs::read_to_string(&path)
-        .ok()
-        .and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok())
-        .filter(|v| v.is_object())
-        .unwrap_or_else(|| serde_json::json!({}));
+    // Only start fresh when the file is absent. If it exists but doesn't parse
+    // as a JSON object, abort rather than overwrite — clobbering the user's
+    // real settings (a malformed edit, a non-object root) would lose data.
+    let mut root = match std::fs::read_to_string(&path) {
+        Err(_) => serde_json::json!({}),
+        Ok(s) => {
+            let s = s.strip_prefix('\u{feff}').unwrap_or(&s); // tolerate a UTF-8 BOM
+            if s.trim().is_empty() {
+                serde_json::json!({})
+            } else {
+                let v: serde_json::Value = serde_json::from_str(s)
+                    .map_err(|e| format!("settings.local.json is not valid JSON: {e}"))?;
+                if !v.is_object() {
+                    return Err("settings.local.json root is not a JSON object".into());
+                }
+                v
+            }
+        }
+    };
     let obj = root.as_object_mut().ok_or("settings root is not an object")?;
     if style.is_empty() || style == "Default" {
         obj.remove("outputStyle");
