@@ -672,9 +672,25 @@ async function newSession(cwd, opts = {}) {
   // titlebar as clipped garbage).
   s.term.onTitleChange((t) => {
     if (!s.tabEl) return;
-    const name = t && t.trim() ? t.trim() : basename(s.cwd);
+    const raw = t && t.trim() ? t.trim() : '';
+    const name = raw || basename(s.cwd);
     s.tabEl.querySelector('.name').textContent = name;
     s.tabEl.title = `${s.cwd}\n${name}`;
+    // Mirror the live topic onto the Remote Control session name so the Claude
+    // app shows the same thing as the tab, not the folder. Remote names don't
+    // track the topic on their own, so we push /rename when the title settles.
+    // Debounced (titles flicker while Claude works) and guarded so we never
+    // rename to the folder, to an unchanged value, or in a loop with the echo
+    // that /rename itself produces.
+    if (raw && raw !== basename(s.cwd)) {
+      const want = raw.slice(0, 60);
+      clearTimeout(s.renameTimer);
+      s.renameTimer = setTimeout(() => {
+        if (!sessions.has(s.ptyId) || want === s.lastRemoteName) return;
+        s.lastRemoteName = want;
+        submitToPty(s.ptyId, `/rename ${want}`);
+      }, 2000);
+    }
   });
 
   makeTab(s);
@@ -2163,6 +2179,14 @@ async function boot() {
   mb.onclick = () => ($('modelmenu') ? $('modelmenu').remove() : showModelMenu(mb));
   $('tabs').appendChild(mb);
 
+  // Working-tree diff of the focused session, via Claude's own /diff review.
+  const df = document.createElement('button');
+  df.id = 'diffbtn';
+  df.textContent = 'diff';
+  df.title = 'Review the focused session’s uncommitted changes (/diff)';
+  df.onclick = () => { if (active) typeToActive('/diff'); };
+  $('tabs').appendChild(df);
+
   const ab = document.createElement('button');
   ab.id = 'about-btn';
   ab.textContent = 'ⓘ';
@@ -2247,6 +2271,7 @@ Short list of everything. For detail see the [GitHub README](https://github.com/
 - Status bar: model, effort, context %, rate limits, session cost.
 - Model & effort picker (top right): switches the active session right away and every new one after it, or only this tab ("this session only"). Type any model id into the custom row.
 - Auto-continue after a rate limit: right-click a tab to schedule it.
+- \`diff\` button (tab bar): reviews the focused session's uncommitted changes with Claude's \`/diff\`.
 
 **The file tree & preview**
 - Live tree; Claude's edits glow amber, turn green once seen, blue dot = uncommitted git change.
@@ -2256,7 +2281,7 @@ Short list of everything. For detail see the [GitHub README](https://github.com/
 - Point at the running app: click an element (🎯) or draw annotations (✏️) and send them to Claude.
 
 **Remote & orchestration**
-- Remote Control: steer any session from your phone or the web.
+- Remote Control: steer any session from your phone or the web; the app names each session after the live topic (kept in step with the tab), not the folder.
 - \`crydeck\` CLI on every session: \`spawn <folder> [prompt]\`, \`list\`, \`read <id>\`, \`send <id> <text>\` — so a session can open and drive others (and you can spawn new work from your phone).
 
 **Prompt library**
