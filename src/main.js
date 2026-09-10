@@ -119,7 +119,7 @@ function submitToPty(id, text) {
 }
 
 function typeToActive(cmd) {
-  if (active?.ptyId) submitToPty(active.ptyId, cmd);
+  if (active?.ptyId) { trace(`typeToActive → ${JSON.stringify(cmd)}`); submitToPty(active.ptyId, cmd); }
 }
 
 // Output styles (built-ins). Applied by writing outputStyle into the focused
@@ -689,25 +689,13 @@ async function newSession(cwd, opts = {}) {
   // titlebar as clipped garbage).
   s.term.onTitleChange((t) => {
     if (!s.tabEl) return;
-    const raw = t && t.trim() ? t.trim() : '';
-    const name = raw || basename(s.cwd);
+    // Claude Code prefixes the terminal title with its working spinner (a run of
+    // ✳/✽ characters), so the raw title flickers frame by frame. Strip the
+    // leading spinner + whitespace so the tab shows the clean name/topic.
+    const clean = (t || '').replace(/^[\s✳✻✽✼✾❋*·•]+/u, '').trim();
+    const name = clean || basename(s.cwd);
     s.tabEl.querySelector('.name').textContent = name;
     s.tabEl.title = `${s.cwd}\n${name}`;
-    // Mirror the live topic onto the Remote Control session name so the Claude
-    // app shows the same thing as the tab, not the folder. Remote names don't
-    // track the topic on their own, so we push /rename when the title settles.
-    // Debounced (titles flicker while Claude works) and guarded so we never
-    // rename to the folder, to an unchanged value, or in a loop with the echo
-    // that /rename itself produces.
-    if (raw && raw !== basename(s.cwd)) {
-      const want = raw.slice(0, 60);
-      clearTimeout(s.renameTimer);
-      s.renameTimer = setTimeout(() => {
-        if (!sessions.has(s.ptyId) || want === s.lastRemoteName) return;
-        s.lastRemoteName = want;
-        submitToPty(s.ptyId, `/rename ${want}`);
-      }, 2000);
-    }
   });
 
   makeTab(s);
@@ -2085,6 +2073,11 @@ function contextMenu(ev, items) {
     m.appendChild(it);
   }
   document.body.appendChild(m);
+  // Keep the menu inside the window: buttons near the right edge (diff/style)
+  // would otherwise open off-screen and clip.
+  const r = m.getBoundingClientRect();
+  if (r.right > window.innerWidth - 6) m.style.left = `${Math.max(6, window.innerWidth - r.width - 6)}px`;
+  if (r.bottom > window.innerHeight - 6) m.style.top = `${Math.max(6, window.innerHeight - r.height - 6)}px`;
   const kill = () => { m.remove(); window.removeEventListener('pointerdown', onDown, true); };
   const onDown = (e) => { if (!m.contains(e.target)) kill(); };
   window.addEventListener('pointerdown', onDown, true);
@@ -2308,7 +2301,7 @@ Short list of everything. For detail see the [GitHub README](https://github.com/
 - Point at the running app: click an element (🎯) or draw annotations (✏️) and send them to Claude.
 
 **Remote & orchestration**
-- Remote Control: steer any session from your phone or the web; the app names each session after the live topic (kept in step with the tab), not the folder.
+- Remote Control: steer any session from your phone or the web; the app names each session after your first prompt, not the folder.
 - \`crydeck\` CLI on every session: \`spawn <folder> [prompt]\`, \`list\`, \`read <id>\`, \`send <id> <text>\` — so a session can open and drive others (and you can spawn new work from your phone).
 
 **Prompt library**
