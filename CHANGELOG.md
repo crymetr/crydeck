@@ -9,6 +9,7 @@ versions are git tags.
 - **Split view.** Watch two sessions side by side: right-click a tab → *Split right* pins it beside the focused one, click either pane to move focus (the tree, preview and model picker follow the focused pane), right-click → *Unsplit* to collapse. Each pane types into its own session.
 - **Remote Control name follows the topic.** The Claude app now tracks the live conversation topic instead of freezing on the first prompt: when the tab title settles, CryDeck mirrors it onto the Remote Control session with `/rename` (debounced, so it doesn't chase every flicker). You'll see the occasional `/rename` line in the terminal.
 - **Diff button.** A `diff` button in the tab bar runs Claude's `/diff` in the focused session to review its uncommitted working-tree changes.
+- **Output style picker.** A `style` button in the tab bar switches the focused session's output style (Default / Proactive / Concise / Explanatory / Learning). Since `/output-style` was removed from the CLI, CryDeck writes the `outputStyle` field into the folder's `.claude/settings.local.json` (merged, not clobbered); Claude applies it from your next message.
 
 ### Fixed
 - **Model / effort picker did nothing mid-session.** Picking a model typed `/model <id>\r` into the session as one burst; the trailing Enter raced Claude's slash-command palette and selected a suggestion instead of submitting the line, so the model never changed. The text and the Enter are now sent as two keystrokes, so `/model` and `/effort` land. Same fix applies to auto-continue and seeded prompts.
