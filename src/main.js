@@ -985,6 +985,7 @@ function buildTree(s) {
   const expanded = new Set();
   const nodeByPath = new Map(); // norm path -> node element
   let selected = null;
+  let renderGen = 0; // bumped on every refresh/re-root; stale async listings bail
 
   // The watcher mirrors what the tree shows: root + expanded dirs, each
   // non-recursive. Cheap even for a tab sitting on C:\dev, and a project
@@ -1004,9 +1005,10 @@ function buildTree(s) {
     hdr.innerHTML = `${up}<span class="root" title="${esc(s.treeRoot)}">${esc(s.treeRoot)}</span><button class="rf" title="Refresh">⟳</button>`;
     hdr.querySelector('.rf').onclick = () => refresh();
     hdr.querySelector('.up')?.addEventListener('click', () => {
-      // one level up, clamped to the launch folder
+      // one level up, clamped to the launch folder (<= guards drive roots like
+      // D:\, where parentDir would drop to a broken drive-relative "D:")
       const par = parentDir(s.treeRoot);
-      setRoot(norm(par).length < norm(s.cwd).length ? s.cwd : par);
+      setRoot(norm(par).length <= norm(s.cwd).length ? s.cwd : par);
     });
   }
   renderHdr();
@@ -1041,10 +1043,11 @@ function buildTree(s) {
     for (const rec of nodeByPath.values()) applyMark(rec.el, markFor(rec.p, rec.isDir));
   }
 
-  async function renderInto(container, dir) {
+  async function renderInto(container, dir, gen = renderGen) {
     let entries;
     try { entries = await invoke('fs_list', { dir }); }
-    catch (e) { container.innerHTML = `<div class="row" style="color:#c66">${esc(String(e))}</div>`; return; }
+    catch (e) { if (gen === renderGen) container.innerHTML = `<div class="row" style="color:#c66">${esc(String(e))}</div>`; return; }
+    if (gen !== renderGen) return; // a re-root/refresh superseded this listing
     container.innerHTML = '';
     for (const en of entries) {
       const p = dir.replace(/[\\/]+$/, '') + '\\' + en.name;
@@ -1100,21 +1103,31 @@ function buildTree(s) {
   }
 
   function refresh() {
+    const gen = ++renderGen;
     nodeByPath.clear();
     selected = null;
-    renderInto(rootKids, s.treeRoot);
+    renderInto(rootKids, s.treeRoot, gen);
     syncWatch();
-    invoke('git_status', { root: s.treeRoot }).then((list) => {
+    const root = s.treeRoot;
+    invoke('git_status', { root }).then((list) => {
+      if (gen !== renderGen) return;          // superseded by a newer root
       s.gitDirty = new Set(list.map(norm));
       recomputeMarks();
-    }).catch(() => {});
+    }).catch(() => {
+      if (gen !== renderGen) return;
+      s.gitDirty = new Set();                 // non-repo / error: clear stale dots
+      recomputeMarks();
+    });
   }
 
   // Re-root the tree at a subfolder (the folder Claude is working in), or back
-  // up. Only the tree moves — the session's real cwd/identity stays put.
+  // up. Only the tree moves — the session's real cwd/identity stays put. Any
+  // re-root (manual or auto) consumes the one-shot so auto never fights the user.
   function setRoot(root) {
+    s.autoRerooted = true;
     if (norm(root) === norm(s.treeRoot)) return;
     s.treeRoot = root;
+    s.treeDirty = false;   // we refresh right now; don't re-refresh on activate
     expanded.clear();
     renderHdr();
     refresh();
@@ -1160,7 +1173,7 @@ async function noteWorkDir(s, cwd, editPath) {
     try {
       const e = await invoke('fs_list', { dir: s.cwd });
       s.isProjectRoot = e.some((x) => PROJECT_MARKERS.has(String(x.name).toLowerCase()));
-    } catch { s.isProjectRoot = false; }
+    } catch { return; } // transient read failure: leave undefined, retry next event
   }
   // re-check after the await: the tab may have closed, or a concurrent call
   // may have already re-rooted, while fs_list was in flight
@@ -1845,7 +1858,7 @@ function openPalette({ placeholder, onInput, onPick, initial = [] }) {
 
 async function filesPalette() {
   if (!active) return;
-  const all = await invoke('git_ls_files', { root: active.cwd }).catch(() => []);
+  const all = await invoke('git_ls_files', { root: active.treeRoot }).catch(() => []);
   if (!all.length) { uiConfirm('No git-tracked files here (not a repo, or empty).', 'OK'); return; }
   const toRows = (arr) => arr.map((f) => ({ value: f, label: f }));
   openPalette({
@@ -1862,7 +1875,7 @@ async function grepPalette() {
     placeholder: 'Search in files (git grep) — Enter inserts @file',
     onInput: async (q) => {
       if (!q.trim()) return [];
-      const hits = await invoke('git_grep', { root: active.cwd, query: q }).catch(() => []);
+      const hits = await invoke('git_grep', { root: active.treeRoot, query: q }).catch(() => []);
       return hits.map((h) => ({
         value: h.file,
         html: `<span style="color:#7aa2ff">${esc(h.file)}:${h.line}</span>  <span style="color:#8a8a94">${esc((h.text || '').trim())}</span>`,
@@ -2047,7 +2060,7 @@ window.addEventListener('keydown', (e) => {
   if (paletteOpen) return;
   if (k === 'p') filesPalette();
   else if (k === 'f') grepPalette();
-  else if (k === 'e') { if (active) invoke('open_in_editor', { root: active.cwd }).catch(() => {}); }
+  else if (k === 'e') { if (active) invoke('open_in_editor', { root: active.treeRoot }).catch(() => {}); }
   else if (k === 'k') promptsPalette();
 }, true);
 

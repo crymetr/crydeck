@@ -3,6 +3,17 @@
 All notable changes to CryDeck. Format loosely follows Keep a Changelog;
 versions are git tags.
 
+## v0.20.3 - 2026-09-11
+
+### Fixed
+- **Re-root races.** A slow directory listing from the old root could resolve late and overwrite the new root's tree; a generation guard now discards superseded listings (git status too).
+- **Manual re-root now sticks.** Using ▲ or "Focus tree here" consumes the one-time auto-focus, so a later edit can't yank the tree away after you've navigated yourself.
+- **▲ at a drive-root launch.** Launching at `D:\` no longer lets ▲ produce a broken drive-relative `D:`.
+- **Palette commands follow the focused folder.** Find file (Ctrl+Shift+P), find in files (Ctrl+Shift+F) and open in VS Code (Ctrl+Shift+E) now target the tree's focused project, not the launch folder.
+- **Stale marks.** A non-repo or failed `git status` clears old change dots instead of freezing them; a transient folder-read failure no longer permanently disables the launched-in-a-project guard.
+
+(ai-team review: Kimi K3 + Gemini 3.1 Pro, findings-only.)
+
 ## v0.20.2 - 2026-09-11
 
 ### Changed
