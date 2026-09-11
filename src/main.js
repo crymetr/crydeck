@@ -31,6 +31,16 @@ const norm = (p) => p.replace(/\//g, '\\').replace(/\\+$/, '').toLowerCase();
 // page renders like a browser without any server.
 const fileUrl = (p) => 'file:///' + encodeURI(p.replace(/\\/g, '/'));
 const basename = (p) => p.replace(/[\\/]+$/, '').split(/[\\/]/).pop() || p;
+const parentDir = (p) => p.replace(/[\\/]+$/, '').replace(/[\\/][^\\/]+$/, '') || p;
+// The first path segment of `path` below `root`, as an absolute path, or null if
+// `path` isn't strictly under `root`. C:\dev + C:\dev\cockpit\src\x → C:\dev\cockpit.
+const firstSegmentUnder = (root, path) => {
+  if (!root || !path) return null;
+  const nr = norm(root), np = norm(path);
+  if (np === nr || !np.startsWith(nr + '\\')) return null;
+  const seg = path.replace(/[\\/]+$/, '').slice(root.replace(/[\\/]+$/, '').length).replace(/^[\\/]+/, '').split(/[\\/]/)[0];
+  return seg ? root.replace(/[\\/]+$/, '') + '\\' + seg : null;
+};
 const esc = (s) => s.replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 
 let gw = null;                 // { port, init_ps1, settings_json }
@@ -591,6 +601,8 @@ async function newSession(cwd, opts = {}) {
 
   const s = {
     ptyId: null, cwd, term, fit, box,
+    treeRoot: cwd,           // folder the tree is rooted at (re-roots to Claude's working subfolder)
+    autoRerooted: false,     // we auto-focus the working folder only once, never fighting the user
     decoder: new TextDecoder('utf-8', { fatal: false }),
     changed: new Set(),      // norm paths Claude edited this session
     seen: new Set(),         // subset of changed the user has opened since
@@ -978,14 +990,26 @@ function buildTree(s) {
   // non-recursive. Cheap even for a tab sitting on C:\dev, and a project
   // folder Claude scaffolds under the root still appears the moment it lands.
   const syncWatch = () =>
-    invoke('fs_watch_dirs', { tab: s.ptyId, dirs: [s.cwd, ...expanded] })
+    invoke('fs_watch_dirs', { tab: s.ptyId, dirs: [s.treeRoot, ...expanded] })
       .catch((e) => trace(`fs_watch_dirs failed: ${e}`));
 
   const hdr = document.createElement('div');
   hdr.className = 'hdr';
-  hdr.innerHTML = `<span class="root">${esc(s.cwd)}</span><button title="Refresh">⟳</button>`;
-  hdr.querySelector('button').onclick = () => refresh();
   el.appendChild(hdr);
+  // Header shows the tree root; once it has re-rooted below the launch folder it
+  // grows a ▲ that pops back up one level (never above the launch folder).
+  function renderHdr() {
+    const rooted = norm(s.treeRoot) !== norm(s.cwd);
+    const up = rooted ? `<button class="up" title="Up to ${esc(parentDir(s.treeRoot))}">▲</button>` : '';
+    hdr.innerHTML = `${up}<span class="root" title="${esc(s.treeRoot)}">${esc(s.treeRoot)}</span><button class="rf" title="Refresh">⟳</button>`;
+    hdr.querySelector('.rf').onclick = () => refresh();
+    hdr.querySelector('.up')?.addEventListener('click', () => {
+      // one level up, clamped to the launch folder
+      const par = parentDir(s.treeRoot);
+      setRoot(norm(par).length < norm(s.cwd).length ? s.cwd : par);
+    });
+  }
+  renderHdr();
   const rootKids = document.createElement('div');
   el.appendChild(rootKids);
 
@@ -1055,6 +1079,7 @@ function buildTree(s) {
         row.oncontextmenu = (ev) => {
           ev.preventDefault();
           contextMenu(ev, [
+            ['Focus tree here', () => s.tree.setRoot(p)],
             ['Open as session', () => newSession(p)],
             ['Explorer here', () => invoke('os_explore', { path: p })],
           ]);
@@ -1077,16 +1102,27 @@ function buildTree(s) {
   function refresh() {
     nodeByPath.clear();
     selected = null;
-    renderInto(rootKids, s.cwd);
+    renderInto(rootKids, s.treeRoot);
     syncWatch();
-    invoke('git_status', { root: s.cwd }).then((list) => {
+    invoke('git_status', { root: s.treeRoot }).then((list) => {
       s.gitDirty = new Set(list.map(norm));
       recomputeMarks();
     }).catch(() => {});
   }
+
+  // Re-root the tree at a subfolder (the folder Claude is working in), or back
+  // up. Only the tree moves — the session's real cwd/identity stays put.
+  function setRoot(root) {
+    if (norm(root) === norm(s.treeRoot)) return;
+    s.treeRoot = root;
+    expanded.clear();
+    renderHdr();
+    refresh();
+  }
+
   refresh();
 
-  return { el, recomputeMarks, refresh };
+  return { el, recomputeMarks, refresh, setRoot };
 }
 
 // Real-time tree: the Rust watcher coalesces filesystem churn per session and
@@ -1097,6 +1133,39 @@ listen('cockpit-fs', (ev) => {
   if (s === active) s.tree.refresh();
   else s.treeDirty = true;
 });
+
+// When a session launched on a broad folder (C:\dev) and Claude starts working
+// in a project under it, re-root the tree there once so the left panel shows
+// what's being edited instead of a wall of sibling folders. Signal: Claude's
+// hook cwd, or the folder its edits land in. Skipped when the launch folder is
+// itself a project (don't jump into a random subfolder), and never fights a
+// manual re-root.
+const PROJECT_MARKERS = new Set(['.git', 'package.json', 'cargo.toml', 'pyproject.toml', 'go.mod', '.hg', '.svn', 'pnpm-workspace.yaml', 'requirements.txt']);
+async function noteWorkDir(s, cwd, editPath) {
+  if (!s || s.autoRerooted || norm(s.treeRoot) !== norm(s.cwd)) return;
+  // cwd (Claude's own directory) is always a folder, so its first segment under
+  // the launch dir is a safe re-root target. An edit path only yields a folder
+  // when the file is nested (root\proj\file), never when it sits directly in the
+  // launch dir (root\file — that first segment is the file itself).
+  const nested = (pth) => {
+    if (!pth) return null;
+    const nr = norm(s.cwd), np = norm(pth);
+    if (!np.startsWith(nr + '\\')) return null;
+    const rest = pth.replace(/[\\/]+$/, '').slice(s.cwd.replace(/[\\/]+$/, '').length).replace(/^[\\/]+/, '');
+    return rest.split(/[\\/]/).length >= 2 ? firstSegmentUnder(s.cwd, pth) : null;
+  };
+  const cand = firstSegmentUnder(s.cwd, cwd) || nested(editPath);
+  if (!cand) return;
+  if (s.isProjectRoot === undefined) {
+    try {
+      const e = await invoke('fs_list', { dir: s.cwd });
+      s.isProjectRoot = e.some((x) => PROJECT_MARKERS.has(String(x.name).toLowerCase()));
+    } catch { s.isProjectRoot = false; }
+  }
+  if (s.autoRerooted || norm(s.treeRoot) !== norm(s.cwd)) return; // re-check after await
+  s.autoRerooted = true;
+  if (!s.isProjectRoot) s.tree.setRoot(cand);   // launched inside a project → leave the tree put
+}
 
 // ------------------------------------------------------------------ preview
 
@@ -1212,7 +1281,7 @@ async function renderFile(s) {
   if (s !== active || s.pvMode !== 'file' || s.pvFile !== file) return;
   let diff = s.pvDiffFor === file ? s.pvDiff : '';
   if (!diff) {
-    invoke('git_diff', { root: s.cwd, path: file }).then((d) => {
+    invoke('git_diff', { root: s.treeRoot, path: file }).then((d) => {
       if (!d || s !== active || s.pvMode !== 'file' || s.pvFile !== file) return;
       s.pvDiff = d; s.pvDiffFor = file;
       renderFile(s); // re-render, now with the Content|Diff switch available
@@ -1520,6 +1589,7 @@ listen('cockpit-status', (ev) => {
   if (!s) return;
   s.status = j;
   s.statusAt = Date.now();
+  noteWorkDir(s, j.cwd || j.workspace?.current_dir);
   if (s === active) renderStatus();
 });
 
@@ -1545,6 +1615,7 @@ listen('cockpit-tool', (ev) => {
   if (!p) return;
   s.changed.add(norm(p));
   s.seen.delete(norm(p)); // a re-edit makes it unread again
+  noteWorkDir(s, j.cwd || j.workspace?.current_dir, p);
   s.tree.recomputeMarks();
   addFeed(s, 'file', p);
   // Attach to the current task. Edits before any prompt (auto-run, resumed
@@ -2320,7 +2391,8 @@ Short list of everything. For detail see the [GitHub README](https://github.com/
 - \`diff\` button (tab bar): reviews the focused session's uncommitted changes with Claude's \`/diff\`.
 
 **The file tree & preview**
-- Live tree; Claude's edits glow amber, turn green once seen, blue dot = uncommitted git change.
+- Live tree; Claude's edits glow amber (bold + left bar), turn green once seen, blue dot = uncommitted git change.
+- Launched on a broad folder (C:\\dev)? The tree re-roots to the project Claude starts working in; ▲ pops back up, right-click a folder → "Focus tree here" to move it yourself.
 - File view: code, rendered markdown, images, with a Content|Diff switch.
 - HTML and PDF files render automatically; the App pane runs your dev server's localhost.
 - Feed: everything Claude produced. Review: edits grouped under the prompt that caused them.

@@ -100,6 +100,7 @@
   #tree .hdr button { background: none; border: none; color: var(--dim);
     cursor: pointer; font-size: 13px; padding: 0 4px; }
   #tree .hdr button:hover { color: var(--fg); }
+  #tree .hdr .up { color: var(--accent); font-weight: 700; }
   .node { cursor: pointer; }
   .node > .row { display: flex; align-items: center; gap: 5px; padding: 1px 6px;
     white-space: nowrap; }
@@ -108,8 +109,10 @@
   .node .arrow { width: 10px; color: var(--dim); font-size: 9px; flex: 0 0 auto; }
   .node .ico { flex: 0 0 auto; opacity: .8; }
   .node .label { overflow: hidden; text-overflow: ellipsis; }
-  .node.changed > .row .label { color: var(--changed); }
-  .node.changed > .row .label::after { content: " ●"; font-size: 8px; }
+  /* changed = Claude edited it, unseen: loud (bold + amber left bar + dot) */
+  .node.changed > .row { box-shadow: inset 2px 0 0 0 var(--changed); background: rgba(226,185,61,.07); }
+  .node.changed > .row .label { color: var(--changed); font-weight: 600; }
+  .node.changed > .row .label::after { content: " ●"; font-size: 9px; }
   .node.seen > .row .label { color: #7fae7f; }
   .node.seen > .row .label::after { content: " ●"; font-size: 8px; opacity: .55; }
   .node.git > .row .label::after { content: " ●"; font-size: 8px; color: #6f8fd0; opacity: .7; }

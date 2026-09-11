@@ -3,6 +3,15 @@
 All notable changes to CryDeck. Format loosely follows Keep a Changelog;
 versions are git tags.
 
+## v0.20.1 - 2026-09-11
+
+### Added
+- **Tree follows Claude's working folder.** Launch a session on a broad folder (e.g. `C:\dev`) and the left tree now re-roots to the project subfolder Claude actually starts working in — detected from its working directory or the folder its edits land in — so you see what's being touched instead of a wall of sibling folders. A ▲ in the tree header pops back up (never above the launch folder), and right-click a folder → **Focus tree here** re-roots manually. It focuses once and never fights a manual move; a session launched straight into a project is left alone.
+
+### Changed
+- **Changed files/folders stand out more** — the edited entry gets a bold amber label and a left accent bar, and its parent folders carry the mark so you can find it in a collapsed tree.
+- **Git status and diffs key off the focused tree root**, so once the tree lands on a real repo (e.g. `cockpit` under `C:\dev`, which isn't a repo itself) uncommitted-change dots and the Content|Diff switch light up.
+
 ## v0.20.0 - 2026-09-10
 
 ### Added
