@@ -1162,7 +1162,9 @@ async function noteWorkDir(s, cwd, editPath) {
       s.isProjectRoot = e.some((x) => PROJECT_MARKERS.has(String(x.name).toLowerCase()));
     } catch { s.isProjectRoot = false; }
   }
-  if (s.autoRerooted || norm(s.treeRoot) !== norm(s.cwd)) return; // re-check after await
+  // re-check after the await: the tab may have closed, or a concurrent call
+  // may have already re-rooted, while fs_list was in flight
+  if (!sessions.has(s.ptyId) || s.autoRerooted || norm(s.treeRoot) !== norm(s.cwd)) return;
   s.autoRerooted = true;
   if (!s.isProjectRoot) s.tree.setRoot(cand);   // launched inside a project → leave the tree put
 }
@@ -2081,7 +2083,9 @@ async function spawnShell(s) {
   };
   const args = ['-NoLogo', '-NoExit', '-ExecutionPolicy', 'Bypass', '-Command', `. '${gw.init_ps1}'`];
   let ptyId;
-  const opts = (cmd) => ({ cmd, args, cwd: s.cwd, cols: term.cols || 90, rows: term.rows || 14, onOutput });
+  // Extra shells open in the folder the tree is focused on (the project Claude
+  // is working in), not the broad launch folder.
+  const opts = (cmd) => ({ cmd, args, cwd: s.treeRoot, cols: term.cols || 90, rows: term.rows || 14, onOutput });
   try { ptyId = await invoke('pty_spawn', opts('pwsh.exe')); }
   catch { ptyId = await invoke('pty_spawn', opts('powershell.exe')); }
   term.onData((d) => { const g = guardData(d); if (g !== null) invoke('pty_write', { id: ptyId, data: g }); });

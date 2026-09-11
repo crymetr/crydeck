@@ -3,6 +3,14 @@
 All notable changes to CryDeck. Format loosely follows Keep a Changelog;
 versions are git tags.
 
+## v0.20.2 - 2026-09-11
+
+### Changed
+- **Extra terminals open in the focused project folder** (the tree root Claude is working in), not the broad launch folder.
+
+### Fixed
+- **Auto-reroot guards a closing tab.** The working-folder check does an async look-up; it now bails if the tab closed or another event already re-rooted while that was in flight. (ai-team review: Gemini 3.1 Pro.)
+
 ## v0.20.1 - 2026-09-11
 
 ### Added
