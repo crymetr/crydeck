@@ -3,6 +3,11 @@
 All notable changes to CryDeck. Format loosely follows Keep a Changelog;
 versions are git tags.
 
+## v0.20.4 - 2026-09-23
+
+### Added
+- **Opus 5.5** (`claude-opus-5-5`) in the model list, above Opus 5. Released 2026-09-22; thinking is always on for this model, so use the effort picker to tune it.
+
 ## v0.20.3 - 2026-09-11
 
 ### Fixed

@@ -64,6 +64,7 @@ const MODELS = [
   { id: '', label: 'Default', note: 'from ~\\.claude\\settings.json' },
   { id: 'claude-fable-5-1', label: 'Fable 5.1', m1: true },
   { id: 'claude-fable-5', label: 'Fable 5', m1: true },
+  { id: 'claude-opus-5-5', label: 'Opus 5.5', m1: true },
   { id: 'claude-opus-5', label: 'Opus 5', m1: true },
   { id: 'claude-opus-4-8', label: 'Opus 4.8', m1: true },
   { id: 'claude-sonnet-5', label: 'Sonnet 5', m1: true },
