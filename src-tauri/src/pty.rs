@@ -446,6 +446,18 @@ pub fn pty_kill(state: tauri::State<'_, PtyState>, id: u32) -> Result<(), String
     Ok(())
 }
 
+/// Is the session's shell process still running? ConPTY never hands the reader
+/// an EOF when the child exits, so this is the only reliable exit signal. Used
+/// by the Remote Control tab's watchdog; an unknown id counts as dead.
+#[tauri::command]
+pub fn pty_alive(state: tauri::State<'_, PtyState>, id: u32) -> bool {
+    let mut sessions = state.sessions.lock().unwrap();
+    match sessions.get_mut(&id) {
+        Some(s) => matches!(s.child.try_wait(), Ok(None)),
+        None => false,
+    }
+}
+
 /// The WebView can reload out from under us (user reflex F5, WebView2 crash
 /// recovery). The fresh frontend restores tabs by spawning new shells, so
 /// whatever is still in the session map at that moment is an orphan tree of

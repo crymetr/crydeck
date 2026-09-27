@@ -3,6 +3,20 @@
 All notable changes to CryDeck. Format loosely follows Keep a Changelog;
 versions are git tags.
 
+## v0.21.0 - 2026-09-27
+
+### Added
+- **Remote Control tab.** Turn on "Keep a Remote Control tab open" in the About card (ⓘ). A pinned 📡 tab runs `claude remote-control` (server mode), so your phone or claude.ai/code can start brand-new sessions on this PC. On launch it updates Claude Code first (npm or native install), and restored tabs wait for that update before starting claude. If remote-control stops it restarts with backoff (5s up to 5 min); if the tab's shell dies, a watchdog reopens the tab. Right-click the tab to restart it or turn it off; click the folder in the About card to change where it runs.
+
+### Changed
+- **Exact hook routing.** The hook command now passes the tab's `COCKPIT_TAB_ID`, so every status/tool/prompt event lands on the tab whose shell started that Claude, even with several tabs on one folder. Sessions the phone starts through the Remote Control tab go to that tab instead of taking over a regular one. Shells that don't expand the variable fall back to the old session-id + folder matching.
+
+### Fixed
+- **Restored conversations could be forgotten.** A restored tab saved its tab list before Claude's first hook arrived, writing an empty session id; a crash in that window lost the link to the conversation. The id is now kept from the start.
+- The Remote Control tab skips the Claude Code update while any other Claude process runs, so it never replaces a claude.exe that is in use.
+
+(ai-team council: GPT-6 Astra + Gemini 3.1 Pro, findings-only.)
+
 ## v0.20.4 - 2026-09-23
 
 ### Added

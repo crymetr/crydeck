@@ -23,6 +23,7 @@ pub fn run() {
       pty::pty_resize,
       pty::pty_kill,
       pty::pty_kill_all,
+      pty::pty_alive,
       pty::bench_report,
       pty::control_sync,
       fs::fs_list,

@@ -39,6 +39,8 @@
   .tab.busy .badge { display: inline-block; background: var(--accent); animation: tabpulse 1.2s ease-in-out infinite; }
   .tab.attn .badge { display: inline-block; background: var(--changed); }
   /* Claude rang for you (permission / waiting): red, pulsing, most urgent. */
+  .tab.rc { border-color: #2c3a5c; color: #9db4ff; }
+  .tab.rc .name { font-weight: 600; }
   .tab.blocked .badge { display: inline-block; background: var(--blocked); animation: tabpulse 1.2s ease-in-out infinite; }
   @keyframes tabpulse { 0%,100% { opacity: .35; } 50% { opacity: 1; } }
   #newtab { border: 1px dashed var(--line); background: none; color: var(--dim);

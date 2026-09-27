@@ -142,6 +142,7 @@ function submitToPty(id, text) {
 }
 
 function typeToActive(cmd) {
+  if (active?.rc) return;   // the Remote Control tab runs the RC server, not a chat
   if (active?.ptyId != null) { trace(`typeToActive → ${JSON.stringify(cmd)}`); submitToPty(active.ptyId, cmd); }
 }
 
@@ -563,6 +564,118 @@ function setupScript(launch) {
   return `$ErrorActionPreference='Continue'; ${banner}; ${tls}; ${pwshInstall}; ${gitInstall}; ${claudeInstall}; ${claudePath}; ${refresh}; ${finish}`;
 }
 
+// ------------------------------------------------------------------ remote control tab
+// Optional pinned tab that runs `claude remote-control` (server mode: the phone
+// or claude.ai/code can start new sessions on this PC). Its shell updates Claude
+// Code once, then loops remote-control with backoff; the shell runs WITHOUT
+// -NoExit, so if the loop is broken (Ctrl+C) the process ends and the watchdog
+// below respawns the whole tab.
+const rcOn = () => localStorage.getItem('cockpit.rc') === '1';
+const rcCwd = () => localStorage.getItem('cockpit.rc.cwd') || 'C:\\dev';
+const rcTab = () => [...sessions.values()].find((s) => s.rc) || null;
+const RC_READY = 'crydeck-rc-ready';
+
+// Restored tabs hold their `claude` launch until the RC tab has finished
+// updating: an npm-installed claude.exe cannot be replaced while any session
+// runs it. Opened by the RC tab's ready title, or after 90s regardless.
+let claudeGate = Promise.resolve();
+let openClaudeGate = () => {};
+
+function rcScript() {
+  // Kept 5.1-compatible (the fallback shell). The ready signal is an OSC title
+  // ended with ST, not BEL, so it never trips the tab's "blocked" badge.
+  return `
+$e = [char]27
+$Host.UI.RawUI.WindowTitle = 'Remote Control'
+function Say($t, $c = 'Cyan') { Write-Host "[rc] $t" -ForegroundColor $c }
+for ($i = 0; $i -lt 15; $i++) { try { [void][Net.Dns]::GetHostAddresses('registry.npmjs.org'); break } catch { if ($i -eq 0) { Say 'waiting for network...' DarkGray }; Start-Sleep 2 } }
+$src = (Get-Command claude -ErrorAction SilentlyContinue).Source
+if ($src) {
+  $v0 = (& claude --version 2>$null) -replace ' \\(Claude Code\\)', ''
+  Say "Claude Code $v0, checking for update..."
+  # Replacing claude.exe under a running session can leave a half-removed
+  # install (npm) or fail on a locked file. Only update when nothing runs it.
+  $busy = @(Get-Process claude -ErrorAction SilentlyContinue).Count
+  if ($busy -gt 0) { Say "$busy other Claude process(es) running, update skipped this time" DarkGray; $upd = 0 }
+  elseif ($src -match '\\\\npm\\\\') { npm install -g @anthropic-ai/claude-code@latest --silent --no-fund --no-audit; $upd = $LASTEXITCODE } else { claude update; $upd = $LASTEXITCODE }
+  $v1 = (& claude --version 2>$null) -replace ' \\(Claude Code\\)', ''
+  if ($upd -ne 0) { Say 'update failed, starting the current version' Yellow }
+  elseif ($v1 -ne $v0) { Say "updated $v0 -> $v1" Green } else { Say "already latest ($v1)" Green }
+} else { Say 'claude not found on PATH' Red }
+Write-Host -NoNewline "$e]0;${RC_READY}$e\\"
+$Host.UI.RawUI.WindowTitle = 'Remote Control'
+$n = 0
+while ($true) {
+  $t0 = Get-Date
+  claude remote-control
+  $code = $LASTEXITCODE
+  if (((Get-Date) - $t0).TotalMinutes -gt 5) { $n = 0 } else { $n++ }
+  $wait = [Math]::Min(300, 5 * [Math]::Pow(2, [Math]::Min($n, 6)))
+  Say "remote-control exited ($code), restarting in $wait s  (Ctrl+C restarts the tab; right-click the tab to turn it off)" Yellow
+  Start-Sleep -Seconds $wait
+}`;
+}
+
+// -EncodedCommand takes base64 of UTF-16LE: no quoting rules to get wrong.
+function encodePs(script) {
+  const b = new Uint8Array(script.length * 2);
+  for (let i = 0; i < script.length; i++) {
+    const c = script.charCodeAt(i);
+    b[2 * i] = c & 255;
+    b[2 * i + 1] = c >> 8;
+  }
+  let bin = '';
+  for (let i = 0; i < b.length; i += 0x8000) bin += String.fromCharCode(...b.subarray(i, i + 0x8000));
+  return btoa(bin);
+}
+
+// Watchdog: runs every 15s while the option is on. Opens the tab if missing,
+// and replaces it if its shell has exited. Spawns are spaced >= 20s apart so a
+// shell that dies instantly cannot turn into a respawn storm.
+let rcSpawning = false;
+let rcLastSpawn = 0;
+async function rcEnsure() {
+  if (!rcOn() || rcSpawning || !gw) return null;
+  let s = rcTab();
+  if (s) {
+    const alive = await invoke('pty_alive', { id: s.ptyId }).catch(() => true);
+    if (alive || !sessions.has(s.ptyId)) return s;
+    trace('rc: shell exited, respawning tab');
+    closeSession(s);
+  }
+  if (Date.now() - rcLastSpawn < 20000) return null;
+  rcLastSpawn = Date.now();
+  rcSpawning = true;
+  try { s = await newSession(rcCwd(), { rc: true }); }
+  catch (e) { trace(`rc spawn failed: ${e}`); s = null; }
+  finally { rcSpawning = false; }
+  return s;
+}
+
+function rcRestart() {
+  const s = rcTab();
+  if (s) closeSession(s);
+  rcLastSpawn = 0;
+  rcEnsure();
+}
+
+function rcDisable() {
+  localStorage.setItem('cockpit.rc', '0');
+  const s = rcTab();
+  if (s) closeSession(s);
+  openClaudeGate();
+}
+
+async function rcEnable(pickFolder = true) {
+  if (pickFolder) {
+    const folder = await invoke('pick_folder', { startDir: rcCwd() }).catch(() => null);
+    if (folder) localStorage.setItem('cockpit.rc.cwd', folder);
+  }
+  localStorage.setItem('cockpit.rc', '1');
+  rcLastSpawn = 0;
+  return rcEnsure();
+}
+
 async function newSession(cwd, opts = {}) {
   if (sessions.size >= MAX_SESSIONS) {
     uiConfirm(`Session cap is ${MAX_SESSIONS}. Close a tab first.`, 'OK');
@@ -617,6 +730,8 @@ async function newSession(cwd, opts = {}) {
     tasks: [],               // { prompt, at, files:Set(norm), reviewed } — the review queue
     tree: null,              // built lazily below
     tabEl: null, lastSize: '',
+    rc: !!opts.rc,           // the pinned Remote Control server tab
+    rcSids: new Set(),       // sessions the phone spawned through it (hook routing)
   };
 
   const onOutput = new Channel();
@@ -635,7 +750,7 @@ async function newSession(cwd, opts = {}) {
     // A BEL means blocked and wins over plain output in the same chunk; any
     // other output means working (Claude resumed), clearing done/blocked.
     s.lastOut = Date.now();
-    if (s !== active && s.tabEl) {
+    if (s !== active && s.tabEl && !s.rc) {
       if (text.includes('\x07')) {
         s.tabEl.classList.remove('busy', 'attn');
         s.tabEl.classList.add('blocked');
@@ -647,7 +762,10 @@ async function newSession(cwd, opts = {}) {
     }
   };
 
-  const args = ['-NoLogo', '-NoExit', '-ExecutionPolicy', 'Bypass', '-Command', `. '${gw.init_ps1}'`];
+  const args = s.rc
+    ? ['-NoLogo', '-ExecutionPolicy', 'Bypass', '-EncodedCommand', encodePs(`. '${gw.init_ps1}'
+${rcScript()}`)]
+    : ['-NoLogo', '-NoExit', '-ExecutionPolicy', 'Bypass', '-Command', `. '${gw.init_ps1}'`];
   const spawnOpts = (cmd) => ({ cmd, args, cwd, cols: s.term.cols || 100, rows: s.term.rows || 30, onOutput });
   try {
     s.ptyId = await invoke('pty_spawn', spawnOpts('pwsh.exe'));
@@ -657,7 +775,11 @@ async function newSession(cwd, opts = {}) {
   }
   sessions.set(s.ptyId, s);
 
-  s.term.onData((d) => { const g = guardData(d); if (g !== null) invoke('pty_write', { id: s.ptyId, data: g }); });
+  s.term.onData((d) => {
+    s.lastInput = Date.now();
+    const g = guardData(d);
+    if (g !== null) invoke('pty_write', { id: s.ptyId, data: g });
+  });
   wireClipboard(s.term, s.box);
   // Clicking either pane in a split moves focus (tree/preview/model follow it).
   s.box.addEventListener('mousedown', () => { if (inPanes(s) && active !== s) focusPane(s); }, true);
@@ -674,8 +796,11 @@ async function newSession(cwd, opts = {}) {
   // The id goes onto a shell command line, so only a plain uuid-shaped token is
   // allowed through; anything else falls back rather than typing junk.
   const sid = /^[A-Za-z0-9-]{8,64}$/.test(opts.sid || '') ? opts.sid : null;
+  // Keep the restored id on the tab right away: persistTabs runs before the
+  // first hook arrives, and saving null there would forget the conversation.
+  if (sid) s.claudeSid = sid;
   const resume = sid ? `--resume ${sid} ` : (opts.resume ? '--continue ' : '');
-  setTimeout(() => {
+  if (!s.rc) setTimeout(() => claudeGate.then(() => {
     if (!sessions.has(s.ptyId)) return;
     // Remote Control on, but no forced name: passing the folder basename pinned
     // every session in the Claude app to "dev" forever. With no name, Claude
@@ -705,7 +830,7 @@ async function newSession(cwd, opts = {}) {
         }, 6000);
       }
     }
-  }, 2500);
+  }), 2500);
 
   s.tree = buildTree(s);
 
@@ -714,6 +839,7 @@ async function newSession(cwd, opts = {}) {
   // titlebar as clipped garbage).
   s.term.onTitleChange((t) => {
     if (!s.tabEl) return;
+    if (s.rc) { if ((t || '').includes(RC_READY)) openClaudeGate(); return; }
     // Claude Code prefixes the terminal title with its working spinner (a run of
     // ✳/✽ glyphs), so the raw title flickers frame by frame. Strip only that
     // spinner family + whitespace — not ASCII * · • which can be real title text.
@@ -724,9 +850,11 @@ async function newSession(cwd, opts = {}) {
   });
 
   makeTab(s);
-  activate(s);
+  // The RC tab opens in the background: it must not steal focus from the
+  // session you are working in when the watchdog brings it back.
+  if (s.rc && active) renderPanes(); else activate(s);
   persistTabs();
-  trace(`session ${s.ptyId} at ${cwd}`);
+  trace(`session ${s.ptyId} at ${cwd}${s.rc ? ' (remote control)' : ''}`);
   return s;
 }
 
@@ -861,6 +989,26 @@ function makeTab(s) {
   el.innerHTML = `<span class="badge"></span><span class="name">${esc(basename(s.cwd))}</span><span class="schedicon">⏱</span><button class="close" title="Close session">×</button>`;
   el.title = s.cwd;
   el.onclick = () => activate(s);
+  if (s.rc) {
+    el.classList.add('rc');
+    el.querySelector('.name').textContent = '📡 Remote Control';
+    el.title = `claude remote-control in ${s.cwd}\nUpdates Claude Code, restarts itself if it stops.`;
+    el.oncontextmenu = (ev) => {
+      ev.preventDefault();
+      contextMenu(ev, [
+        ['Restart Remote Control', () => rcRestart()],
+        ['Turn off (stop keeping this tab open)', () => rcDisable()],
+      ]);
+    };
+    el.querySelector('.close').title = 'Turn off the Remote Control tab';
+    el.querySelector('.close').onclick = async (ev) => {
+      ev.stopPropagation();
+      if (await uiConfirm('Turn off the Remote Control tab?\nTurn it back on in the About card (ⓘ).', 'Turn off')) rcDisable();
+    };
+    $('tabs').prepend(el);
+    s.tabEl = el;
+    return;
+  }
   el.oncontextmenu = (ev) => {
     ev.preventDefault();
     const items = [];
@@ -941,11 +1089,11 @@ function cancelAutoCont(s) {
 // back as its own conversation. Written on open/close and again whenever a tab
 // binds a new id, so a Claude restarted mid-session is what gets restored.
 function persistTabs() {
-  const tabs = [...sessions.values()].map((s) => ({ cwd: s.cwd, sid: s.claudeSid || null }));
+  const tabs = [...sessions.values()].filter((s) => !s.rc).map((s) => ({ cwd: s.cwd, sid: s.claudeSid || null }));
   localStorage.setItem('cockpit.tabs', JSON.stringify(tabs));
   // Keep the backend session roster (for `crydeck list`) in step with the tabs.
   // Name comes from the tab title when Claude has narrated one, else the folder.
-  const roster = [...sessions.values()].map((s) => ({
+  const roster = [...sessions.values()].filter((s) => !s.rc).map((s) => ({
     id: s.ptyId,
     name: (s.tabEl?.querySelector('.name')?.textContent || basename(s.cwd)).trim(),
     cwd: s.cwd,
@@ -1578,18 +1726,36 @@ function scanUrls(s, raw) {
 // from a Claude session binds its session_id to the tab whose folder matches
 // (preferring an unbound tab, so two tabs on one folder still separate);
 // everything after routes by session_id alone.
-function sessionForHook(j) {
+function sessionForHook(j, tab) {
   const sid = j.session_id;
-  if (sid) for (const s of sessions.values()) if (s.claudeSid === sid) return s;
+  // Exact route: the hook command passes $COCKPIT_TAB_ID, which every Claude
+  // inherits from its tab's shell (including sessions the Remote Control tab
+  // spawns for the phone). When present it beats every cwd heuristic below.
+  const pinned = tab != null ? sessions.get(tab) : null;
+  if (pinned) {
+    if (pinned.rc) { if (sid) pinned.rcSids.add(sid); return pinned; }
+    if (sid && pinned.claudeSid !== sid) { pinned.claudeSid = sid; persistTabs(); }
+    return pinned;
+  }
+  if (sid) for (const s of sessions.values()) if (s.claudeSid === sid || s.rcSids.has(sid)) return s;
   const cwd = j.cwd || j.workspace?.current_dir;
   if (!cwd) return null;
   const nc = norm(cwd);
+  // Sessions the phone starts through the Remote Control tab run in its folder
+  // and are unknown ids. Without care they would rebind (hijack) a regular tab
+  // on the same folder. So while an RC tab covers this folder, a bound tab only
+  // rebinds if you typed into it moments ago (/clear, a restarted claude);
+  // anything else is taken to be an RC-spawned session and routed to the RC tab.
+  const rc = rcTab();
+  const rcHere = !!rc && (nc === norm(rc.cwd) || nc.startsWith(norm(rc.cwd) + '\\'));
   let best = null;
   for (const s of sessions.values()) {
-    if (norm(s.cwd) !== nc) continue;
+    if (s.rc || norm(s.cwd) !== nc) continue;
     if (!s.claudeSid) { best = s; break; }
+    if (rcHere && !(Date.now() - (s.lastInput || 0) < 15000)) continue;
     best ??= s; // all bound: claude restarted in this tab, rebind below
   }
+  if (!best && rcHere && sid) { rc.rcSids.add(sid); return rc; }
   // A fresh binding is also what restore needs, so save it right away.
   if (best && sid && best.claudeSid !== sid) {
     best.claudeSid = sid;
@@ -1601,7 +1767,7 @@ function sessionForHook(j) {
 listen('cockpit-status', (ev) => {
   let j;
   try { j = JSON.parse(ev.payload.raw); } catch { return; }
-  const s = sessionForHook(j);
+  const s = sessionForHook(j, ev.payload.tab);
   if (!s) return;
   s.status = j;
   s.statusAt = Date.now();
@@ -1625,7 +1791,7 @@ listen('cockpit-spawn', async (ev) => {
 listen('cockpit-tool', (ev) => {
   let j;
   try { j = JSON.parse(ev.payload.raw); } catch { return; }
-  const s = sessionForHook(j);
+  const s = sessionForHook(j, ev.payload.tab);
   if (!s) return;
   const p = j.tool_input?.file_path || j.tool_input?.notebook_path;
   if (!p) return;
@@ -1648,7 +1814,7 @@ listen('cockpit-tool', (ev) => {
 
 listen('cockpit-prompt', (ev) => {
   let j; try { j = JSON.parse(ev.payload.raw); } catch { return; }
-  const s = sessionForHook(j);
+  const s = sessionForHook(j, ev.payload.tab);
   if (!s || !j.prompt) return;
   s.tasks.unshift({ prompt: String(j.prompt).slice(0, 300), at: Date.now(), files: new Map(), reviewed: false });
   if (s.tasks.length > 100) s.tasks.pop();
@@ -1781,7 +1947,7 @@ function notifyAttn(s) {
 let paletteOpen = false;
 
 function insertIntoActive(text) {
-  if (!active) return;
+  if (!active || active.rc) return;
   invoke('pty_write', { id: active.ptyId, data: text });
   active.term?.focus();
 }
@@ -2330,6 +2496,14 @@ async function boot() {
   ab.onclick = showAbout;
   $('tabs').appendChild(ab);
 
+  // Remote Control tab first, so it can update Claude Code before any restored
+  // tab starts claude (restored shells open right away; their launch waits).
+  if (rcOn()) {
+    claudeGate = new Promise((res) => { openClaudeGate = res; setTimeout(res, 90000); });
+    await rcEnsure();
+  }
+  setInterval(rcEnsure, 15000);
+
   let restored = [];
   try { restored = JSON.parse(localStorage.getItem('cockpit.tabs') || '[]'); } catch {}
   for (const t of restored.slice(0, MAX_SESSIONS)) {
@@ -2418,6 +2592,7 @@ Short list of everything. For detail see the [GitHub README](https://github.com/
 
 **Remote & orchestration**
 - Remote Control: steer any session from your phone or the web; the app names each session after your first prompt, not the folder.
+- Remote Control tab (About card ⓘ → "Keep a Remote Control tab open"): a pinned 📡 tab runs \`claude remote-control\` so your phone can start brand-new sessions on this PC. It updates Claude Code first, then restarts itself if it ever stops. Right-click it to restart or turn it off.
 - \`crydeck\` CLI on every session: \`spawn <folder> [prompt]\`, \`list\`, \`read <id>\`, \`send <id> <text>\` — so a session can open and drive others (and you can spawn new work from your phone).
 
 **Prompt library**
@@ -2473,6 +2648,10 @@ async function showAbout() {
       <span>Start CryDeck when Windows starts</span>
     </label>
     <label style="display:flex;align-items:center;gap:8px;margin-top:8px;cursor:pointer">
+      <input type="checkbox" id="ab-rc" style="cursor:pointer">
+      <span>Keep a Remote Control tab open <span style="color:#8a8a94">(<code>claude remote-control</code> in <a href="#" id="ab-rc-dir" style="color:#7aa2ff;text-decoration:none">${esc(rcCwd())}</a>; updates Claude first, restarts itself)</span></span>
+    </label>
+    <label style="display:flex;align-items:center;gap:8px;margin-top:8px;cursor:pointer">
       <input type="checkbox" id="ab-autorender" style="cursor:pointer">
       <span>Render HTML and PDF files automatically when selected</span>
     </label>
@@ -2490,6 +2669,21 @@ async function showAbout() {
   asBox.onchange = async () => {
     try { asBox.checked ? await autostartEnable() : await autostartDisable(); }
     catch (e) { trace(`autostart toggle failed: ${e}`); asBox.checked = !asBox.checked; }
+  };
+  const rcBox = card.querySelector('#ab-rc');
+  rcBox.checked = rcOn();
+  rcBox.onchange = async () => {
+    if (rcBox.checked) { await rcEnable(false); card.querySelector('#ab-rc-dir').textContent = rcCwd(); }
+    else rcDisable();
+  };
+  card.querySelector('#ab-rc-dir').onclick = async (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    const folder = await invoke('pick_folder', { startDir: rcCwd() }).catch(() => null);
+    if (!folder) return;
+    localStorage.setItem('cockpit.rc.cwd', folder);
+    e.target.textContent = folder;
+    if (rcOn()) rcRestart();
   };
   const arBox = card.querySelector('#ab-autorender');
   arBox.checked = autoRenderHtml;

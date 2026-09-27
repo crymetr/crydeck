@@ -8,7 +8,7 @@
 // invocation with zero shell constructs, valid in cmd, bash and PowerShell.
 //
 // Tab identity: the hook payload itself carries session_id and cwd; the
-// frontend maps those to tabs. No env vars involved.
+// frontend maps those to tabs; a `tab` query param (from $COCKPIT_TAB_ID) pins it exactly when present.
 //
 // Stability: the command string is written into the user's settings.json once,
 // so the gateway uses a fixed port range and a token persisted in app data.
@@ -30,6 +30,10 @@ pub struct Gateway {
 #[derive(serde::Serialize, Clone)]
 struct HookEvent {
     raw: String,
+    /// CryDeck tab (pty id) the hook fired from, when the shell expanded
+    /// $COCKPIT_TAB_ID (git-bash does; cmd/pwsh leave junk that fails to parse).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    tab: Option<u32>,
 }
 
 pub fn start(app: AppHandle) -> Result<Gateway, String> {
@@ -57,6 +61,7 @@ pub fn start(app: AppHandle) -> Result<Gateway, String> {
             let (path, query) = url.split_once('?').unwrap_or((url.as_str(), ""));
             let path = path.to_string();
             let q = parse_query(query);
+            let tab = q.get("tab").and_then(|s| s.parse::<u32>().ok());
 
             if q.get("token").map(String::as_str) != Some(tok.as_str()) {
                 gwlog(&format!("DENIED {path} (bad token)"));
@@ -72,31 +77,31 @@ pub fn start(app: AppHandle) -> Result<Gateway, String> {
                 "/status" => {
                     gwlog(&format!("status {}B", body.len()));
                     let line = render_status_line(&body);
-                    let _ = app.emit("cockpit-status", HookEvent { raw: body });
+                    let _ = app.emit("cockpit-status", HookEvent { raw: body, tab });
                     let _ = req.respond(resp(200, &line));
                 }
                 "/tool" => {
                     gwlog(&format!("tool {}B", body.len()));
-                    let _ = app.emit("cockpit-tool", HookEvent { raw: body });
+                    let _ = app.emit("cockpit-tool", HookEvent { raw: body, tab });
                     let _ = req.respond(resp(200, ""));
                 }
                 "/prompt" => {
                     gwlog(&format!("prompt {}B", body.len()));
-                    let _ = app.emit("cockpit-prompt", HookEvent { raw: body });
+                    let _ = app.emit("cockpit-prompt", HookEvent { raw: body, tab });
                     let _ = req.respond(resp(200, ""));
                 }
                 // Preview bridge: the injected picker/annotator scripts report
                 // here (they cannot use Tauri IPC from a remote origin).
                 "/select" => {
-                    let _ = app.emit("cockpit-select", HookEvent { raw: body });
+                    let _ = app.emit("cockpit-select", HookEvent { raw: body, tab: None });
                     let _ = req.respond(resp(200, ""));
                 }
                 "/annotate" => {
-                    let _ = app.emit("cockpit-annotate", HookEvent { raw: body });
+                    let _ = app.emit("cockpit-annotate", HookEvent { raw: body, tab: None });
                     let _ = req.respond(resp(200, ""));
                 }
                 "/pickoff" => {
-                    let _ = app.emit("cockpit-pickoff", HookEvent { raw: body });
+                    let _ = app.emit("cockpit-pickoff", HookEvent { raw: body, tab: None });
                     let _ = req.respond(resp(200, ""));
                 }
                 // Session-control surface for the `crydeck` CLI (Phase 1). All
@@ -105,7 +110,7 @@ pub fn start(app: AppHandle) -> Result<Gateway, String> {
                 // write session state directly.
                 "/spawn" => {
                     gwlog(&format!("spawn {}B", body.len()));
-                    let _ = app.emit("cockpit-spawn", HookEvent { raw: body });
+                    let _ = app.emit("cockpit-spawn", HookEvent { raw: body, tab: None });
                     let _ = req.respond(resp(200, "ok"));
                 }
                 "/list" => {
@@ -179,10 +184,13 @@ fn persistent_token(dir: &Path) -> Result<String, String> {
 }
 
 fn hook_cmd(port: u16, token: &str, route: &str) -> String {
-    // No env vars, no redirects, no operators: shell-agnostic on purpose.
+    // No redirects, no operators: shell-agnostic on purpose. The one env var,
+    // COCKPIT_TAB_ID (set per pty), tells the gateway which tab the Claude
+    // process lives in. Hooks run under git-bash, which expands it; a shell that
+    // doesn't leaves an unparsable value and routing falls back to session_id+cwd.
     // -m 2 so a dead gateway can never wedge Claude's render loop; connection
     // refused fails in milliseconds when Cockpit is closed.
-    format!("curl.exe -s -m 2 --data-binary @- \"http://127.0.0.1:{port}/{route}?token={token}\"")
+    format!("curl.exe -s -m 2 --data-binary @- \"http://127.0.0.1:{port}/{route}?token={token}&tab=$COCKPIT_TAB_ID\"")
 }
 
 fn is_ours(cmd: &str) -> bool {
