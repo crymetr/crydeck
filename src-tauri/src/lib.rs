@@ -1,3 +1,4 @@
+mod consult;
 mod fs;
 mod hooks;
 mod preview;
@@ -24,6 +25,8 @@ pub fn run() {
       pty::pty_kill,
       pty::pty_kill_all,
       pty::pty_alive,
+      consult::copilot_config_get,
+      consult::copilot_config_set,
       pty::bench_report,
       pty::control_sync,
       fs::fs_list,

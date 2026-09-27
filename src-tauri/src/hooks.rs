@@ -55,6 +55,7 @@ pub fn start(app: AppHandle) -> Result<Gateway, String> {
     install_user_settings(port, &token)?;
 
     let tok = token.clone();
+    let cdir = dir.clone();
     std::thread::spawn(move || {
         for mut req in server.incoming_requests() {
             let url = req.url().to_string();
@@ -146,6 +147,40 @@ pub fn start(app: AppHandle) -> Result<Gateway, String> {
                             let _ = req.respond(resp(404, "no such session"));
                         }
                     }
+                }
+                // `crydeck consult`: body is the prompt, options in the query.
+                // Runs on its own thread (a consult takes minutes) and answers
+                // the held request when Copilot finishes.
+                "/consult" => {
+                    let get = |k: &str| q.get(k).map(|v| crate::consult::url_decode(v)).unwrap_or_default();
+                    let r = crate::consult::ConsultReq {
+                        prompt: body,
+                        cwd: get("dir"),
+                        model: get("model"),
+                        session: get("session"),
+                        write: get("write") == "1",
+                    };
+                    gwlog(&format!("consult {}B cwd={} write={}", r.prompt.len(), r.cwd, r.write));
+                    let d = cdir.clone();
+                    std::thread::spawn(move || {
+                        let out = crate::consult::run(&d, r);
+                        gwlog(&format!("consult done ok={} {}B", out.ok, out.answer.len()));
+                        let text = if out.ok {
+                            let mut t = out.answer;
+                            if !out.session.is_empty() {
+                                t.push_str(&format!(
+                                    "
+
+[copilot session {} | follow up: crydeck consult --session {} <question>]",
+                                    out.session, out.session
+                                ));
+                            }
+                            t
+                        } else {
+                            format!("consult failed: {}", out.detail)
+                        };
+                        let _ = req.respond(resp(if out.ok { 200 } else { 502 }, &text));
+                    });
                 }
                 _ => {
                     let _ = req.respond(resp(404, ""));
@@ -364,10 +399,12 @@ function U([string]$path) { "$base/$path`?token=$tok" }
 $cmd = $args[0]
 switch ($cmd) {
   'spawn' {
+    $agent = 'claude'
+    if ($args[1] -eq '--copilot') { $agent = 'copilot'; $args = @($args[0]) + @($args | Select-Object -Skip 2) }
     $folder = $args[1]
     if (-not $folder) { Write-Host 'usage: crydeck spawn <folder> [prompt...]' -f Yellow; exit 1 }
     $prompt = if ($args.Count -gt 2) { ($args[2..($args.Count-1)] -join ' ') } else { '' }
-    $body = @{ cwd = $folder; prompt = $prompt } | ConvertTo-Json -Compress
+    $body = @{ cwd = $folder; prompt = $prompt; agent = $agent } | ConvertTo-Json -Compress
     Invoke-RestMethod (U 'spawn') -Method Post -Body $body -ContentType 'application/json' | Out-Null
     Write-Host "Spawning session at $folder" -f Green
   }
@@ -389,12 +426,40 @@ switch ($cmd) {
     Invoke-RestMethod "$(U 'send')&id=$id" -Method Post -Body $text -ContentType 'text/plain' | Out-Null
     Write-Host "Sent to session $id" -f Green
   }
+  'consult' {
+    $rest = @($args | Select-Object -Skip 1)
+    if ($rest.Count -and $rest[0] -eq 'copilot') { $rest = @($rest | Select-Object -Skip 1) }
+    $dir = (Get-Location).Path; $model = ''; $session = ''; $write = 0
+    $i = 0
+    while ($i -lt $rest.Count) {
+      $a = [string]$rest[$i]
+      if ($a -in '--dir', '--model', '--session') {
+        if ($i + 1 -ge $rest.Count) { Write-Host "missing value for $a" -f Yellow; exit 1 }
+        $v = [string]$rest[$i + 1]
+        if ($a -eq '--dir') { $dir = $v } elseif ($a -eq '--model') { $model = $v } else { $session = $v }
+        $i += 2
+      } elseif ($a -eq '--write') { $write = 1; $i++ }
+      else { break }
+    }
+    $prompt = (@($rest | Select-Object -Skip $i) -join ' ')
+    if (-not $prompt) { Write-Host 'usage: crydeck consult [copilot] [--dir D] [--model M] [--session ID] [--write] <question...>' -f Yellow; exit 1 }
+    $u = "$(U 'consult')&dir=$([uri]::EscapeDataString($dir))&model=$([uri]::EscapeDataString($model))&session=$([uri]::EscapeDataString($session))&write=$write"
+    try {
+      $r = Invoke-WebRequest $u -Method Post -Body ([Text.Encoding]::UTF8.GetBytes($prompt)) -ContentType 'text/plain; charset=utf-8' -TimeoutSec 1300 -UseBasicParsing
+      [Text.Encoding]::UTF8.GetString($r.RawContentStream.ToArray())
+    } catch {
+      $msg = $_.ErrorDetails.Message; if (-not $msg) { $msg = $_.Exception.Message }
+      Write-Host $msg -f Red; exit 2
+    }
+  }
   default {
     Write-Host 'crydeck - drive your other CryDeck sessions' -f Cyan
-    Write-Host '  crydeck spawn <folder> [prompt...]   open a new session, optionally seed its first message'
+    Write-Host '  crydeck spawn [--copilot] <folder> [prompt...]   open a new (Claude or Copilot) session, optionally seed its first message'
     Write-Host '  crydeck list                         list open sessions with their ids'
     Write-Host '  crydeck read <id> [tailLines]        read another session''s recent output'
     Write-Host '  crydeck send <id> <text...>          type a message into another session'
+    Write-Host '  crydeck consult [copilot] [--dir D] [--model M] [--session ID] [--write] <question...>'
+    Write-Host '                                       ask GitHub Copilot (headless, read-only unless --write)'
   }
 }
 "#;
@@ -410,16 +475,25 @@ gw="$here/gateway.json"
 port="$(grep -oE '"port":[0-9]+' "$gw" | grep -oE '[0-9]+')"
 token="$(grep -oE '"token":"[^"]+"' "$gw" | sed 's/.*"token":"//; s/"$//')"
 base="http://127.0.0.1:$port"
+urlenc() {
+  local LC_ALL=C s="$1" out="" c i
+  for (( i=0; i<${#s}; i++ )); do
+    c="${s:i:1}"
+    case "$c" in [a-zA-Z0-9._~-]) out+="$c" ;; *) out+=$(printf '%%%02X' "'$c") ;; esac
+  done
+  printf '%s' "$out"
+}
 cmd="$1"; shift 2>/dev/null || true
 case "$cmd" in
   spawn)
+    agent="claude"; if [ "$1" = "--copilot" ]; then agent="copilot"; shift; fi
     folder="$1"; shift 2>/dev/null || true; prompt="$*"
     if [ -z "$folder" ]; then echo "usage: crydeck spawn <folder> [prompt...]"; exit 1; fi
     fe="${folder//\\/\\\\}"; fe="${fe//\"/\\\"}"
     pe="${prompt//\\/\\\\}"; pe="${pe//\"/\\\"}"
     curl.exe -s "$base/spawn?token=$token" -H 'Content-Type: application/json' \
-      --data-binary "{\"cwd\":\"$fe\",\"prompt\":\"$pe\"}" >/dev/null
-    echo "Spawning session at $folder" ;;
+      --data-binary "{\"cwd\":\"$fe\",\"prompt\":\"$pe\",\"agent\":\"$agent\"}" >/dev/null
+    echo "Spawning $agent session at $folder" ;;
   list)
     curl.exe -s "$base/list?token=$token" ;;
   read)
@@ -432,12 +506,43 @@ case "$cmd" in
     curl.exe -s "$base/send?token=$token&id=$id" -H 'Content-Type: text/plain' \
       --data-binary "$text" >/dev/null
     echo "Sent to session $id" ;;
+  consult)
+    [ "$1" = "copilot" ] && shift
+    dir="$(pwd -W 2>/dev/null || pwd)"; model=""; session=""; write=0
+    while [ $# -gt 0 ]; do
+      case "$1" in
+        --dir|--model|--session)
+          if [ $# -lt 2 ]; then echo "missing value for $1"; exit 1; fi
+          case "$1" in --dir) dir="$2" ;; --model) model="$2" ;; --session) session="$2" ;; esac
+          shift 2 ;;
+        --write) write=1; shift ;;
+        --) shift; break ;;
+        *) break ;;
+      esac
+    done
+    prompt="$*"
+    # "-" reads the question from stdin (long or multi-line prompts). Never read
+    # stdin implicitly: Claude's Bash tool leaves it open, and cat would hang.
+    if [ "$prompt" = "-" ]; then prompt="$(cat)"; fi
+    if [ -z "$prompt" ]; then echo "usage: crydeck consult [copilot] [--dir D] [--model M] [--session ID] [--write] <question...|->"; exit 1; fi
+    q="dir=$(urlenc "$dir")&model=$(urlenc "$model")&session=$(urlenc "$session")&write=$write"
+    out="$(printf '%s' "$prompt" | curl.exe -s -m 1300 -w '
+%{http_code}' "$base/consult?token=$token&$q" -H 'Content-Type: text/plain; charset=utf-8' --data-binary @-)"
+    code="${out##*$'
+'}"; body="${out%$'
+'*}"
+    if [ "$code" = "000" ]; then echo "CryDeck is not reachable (is it running?)"; exit 2; fi
+    printf '%s
+' "$body"
+    [ "$code" = "200" ] || exit 2 ;;
   *)
     echo "crydeck - drive your other CryDeck sessions"
-    echo "  crydeck spawn <folder> [prompt...]   open a new session, optionally seed its first message"
+    echo "  crydeck spawn [--copilot] <folder> [prompt...]   open a new (Claude or Copilot) session, optionally seed its first message"
     echo "  crydeck list                         list open sessions with their ids"
     echo "  crydeck read <id> [tailLines]        read another session's recent output"
-    echo "  crydeck send <id> <text...>          type a message into another session" ;;
+    echo "  crydeck send <id> <text...>          type a message into another session"
+    echo "  crydeck consult [copilot] [--dir D] [--model M] [--session ID] [--write] <question...|->"
+    echo "                                       ask GitHub Copilot (headless, read-only unless --write); prints its answer" ;;
 esac
 "#;
     std::fs::write(dir.join("crydeck"), sh).map_err(|e| e.to_string())

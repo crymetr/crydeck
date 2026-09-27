@@ -62,6 +62,15 @@ is the entire reason it stays light (~250MB working set, single small binary).
   output, `crydeck send <id> <text>` messages it. It's the Windows-native
   stand-in for Claude Code's cross-session messaging, over a loopback-only,
   token-authed gateway. See ROADMAP.md.
+- **Remote Control tab (opt-in).** A pinned 📡 tab runs `claude remote-control`
+  so your phone or claude.ai/code can start brand-new sessions on this PC. It
+  updates Claude Code first and restarts itself if it stops (About card ⓘ).
+- **GitHub Copilot CLI, side by side.** `+ copilot` opens Copilot sessions in
+  their own tabs (restored with their own conversation; GitHub Enterprise host
+  set in the About card). With the bridge turned on, any session can ask
+  Copilot a question headlessly: `crydeck consult "question"` prints Copilot's
+  final answer (read-only unless `--write`, follow-ups with `--session <id>`),
+  and `crydeck spawn --copilot <folder> [prompt]` opens a Copilot tab.
 - **Keyboard palettes.** Ctrl+Shift+P fuzzy file finder, Ctrl+Shift+F search
   in files (git grep), Ctrl+Shift+E open the folder in VS Code, Ctrl+Shift+K a
   saved-prompt library. The finders insert `@path` into the session so you can
@@ -112,6 +121,9 @@ per-install token). Your original settings file is backed up once as
 `settings.json.pre-cockpit`; an existing statusLine you wrote yourself is
 never replaced; entries are never duplicated. Outside CryDeck the hooks fail
 in milliseconds (connection refused) and Claude carries on unaffected.
+Each command also carries `&tab=$COCKPIT_TAB_ID` (set per tab) so events land
+on the exact tab whose shell started that Claude; a shell that doesn't expand
+the variable just falls back to session-id + folder matching.
 
 Why not `--settings`? Claude Code on Windows executes hook commands through
 git-bash and does not trust hooks from flag-supplied settings files. The

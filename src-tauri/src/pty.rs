@@ -179,6 +179,7 @@ pub fn pty_spawn(
     cols: u16,
     rows: u16,
     on_output: Channel<InvokeResponseBody>,
+    env: Option<std::collections::HashMap<String, String>>,
 ) -> Result<u32, String> {
     let size = PtySize {
         rows,
@@ -213,6 +214,12 @@ pub fn pty_spawn(
     }
     builder.env("TERM", "xterm-256color");
     builder.env("COLORTERM", "truecolor");
+    // Per-tab extras (e.g. COPILOT_GH_HOST for a Copilot tab on a GHE host).
+    for (k, v) in env.unwrap_or_default() {
+        if !k.is_empty() && !k.contains('=') {
+            builder.env(k, v);
+        }
+    }
 
     let id = state.next_id.fetch_add(1, Ordering::Relaxed);
 

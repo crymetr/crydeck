@@ -3,6 +3,16 @@
 All notable changes to CryDeck. Format loosely follows Keep a Changelog;
 versions are git tags.
 
+## v0.22.0 - 2026-09-28
+
+### Added
+- **GitHub Copilot tabs.** `+ copilot` in the tab bar (or right-click `+ session`) opens a GitHub Copilot CLI session in a folder, marked ◆. Each tab gets its own session id up front, so restore reopens its own conversation. The model button switches Copilot models in that tab; the status bar shows model and host. Shown when Copilot CLI is on PATH.
+- **GitHub Enterprise host.** About card → Copilot → Host (e.g. `company.ghe.com`). Passed to Copilot processes only, as `COPILOT_GH_HOST`, so your `gh` CLI is untouched.
+- **Claude ↔ Copilot bridge (off by default).** Turn on "Let sessions consult Copilot" in the About card, then any session can run `crydeck consult "question"` (or `crydeck consult -` to read a long question from stdin). CryDeck runs Copilot headless (`copilot -p --output-format json`), returns only its final answer, and prints the Copilot session id for follow-ups (`--session <id>`). Read-only by default (writes and shell denied); `--write` lifts that for explicit delegation. 20-minute timeout; every answer is also saved under `cockpit-hooks\consults\`.
+- `crydeck spawn --copilot <folder> [prompt]` opens a Copilot tab (seeded prompt works the same as for Claude).
+
+(ai-team council: GPT-6 Astra + Gemini 3.1 Pro + Kimi K3; all three picked headless JSON over reading the Copilot TUI through the pty. Diff reviewed by Astra, 4 findings fixed.)
+
 ## v0.21.0 - 2026-09-27
 
 ### Added

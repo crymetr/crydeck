@@ -110,6 +110,7 @@ function launchFlags() {
 }
 
 function modelBtnLabel() {
+  if (active?.agent === 'copilot') return `◆ ${active.copilotModel || copilotCfg.model || 'auto'}`;
   const m = sessModel(active), e = sessEffort(active);
   const one = m.id && m.m1 && sess1m(active) ? ' 1M' : '';
   return `${sessHasOverride(active) ? '⌖ ' : ''}${m.label}${one}${e ? ' · ' + e : ''}`;
@@ -143,6 +144,7 @@ function submitToPty(id, text) {
 
 function typeToActive(cmd) {
   if (active?.rc) return;   // the Remote Control tab runs the RC server, not a chat
+  if (active?.agent === 'copilot') return;   // Claude slash commands mean nothing to Copilot
   if (active?.ptyId != null) { trace(`typeToActive → ${JSON.stringify(cmd)}`); submitToPty(active.ptyId, cmd); }
 }
 
@@ -564,6 +566,43 @@ function setupScript(launch) {
   return `$ErrorActionPreference='Continue'; ${banner}; ${tls}; ${pwshInstall}; ${gitInstall}; ${claudeInstall}; ${claudePath}; ${refresh}; ${finish}`;
 }
 
+// ------------------------------------------------------------------ copilot
+// GitHub Copilot CLI as a second agent. A Copilot tab is a regular pty tab
+// that launches `copilot` instead of `claude`; it has no Claude hooks, so its
+// tab dot tracks output only. Settings (GHE host, default model, bridge on/off)
+// live in cockpit-hooks\copilot.json so the gateway's `crydeck consult` reads
+// the same values. The host goes in as COPILOT_GH_HOST (Copilot only; the
+// user's `gh` CLI keeps its own GH_HOST).
+let copilotCfg = { bridge: false, host: '', model: '' };
+const safeTok = (v) => (/^[A-Za-z0-9._:-]{1,64}$/.test(v || '') ? v : '');
+let hasCopilot = false;
+const COPILOT_MODELS = ['auto', 'claude-sonnet-5', 'claude-opus-5', 'claude-fable-5.1', 'gpt-6-astra', 'gpt-5.6-sol', 'gemini-3.8-flash'];
+const isCopilot = (s) => s?.agent === 'copilot';
+const copilotEnv = () => (copilotCfg.host && copilotCfg.host !== 'github.com' ? { COPILOT_GH_HOST: copilotCfg.host } : {});
+
+async function saveCopilotCfg(patch) {
+  copilotCfg = { ...copilotCfg, ...patch };
+  try { await invoke('copilot_config_set', { cfg: copilotCfg }); }
+  catch (e) { trace(`copilot config save failed: ${e}`); }
+  paintModelBtn();
+}
+
+function showCopilotModelMenu(ev) {
+  const cur = active.copilotModel || copilotCfg.model || 'auto';
+  contextMenu(ev, COPILOT_MODELS.map((m) => [
+    (m === cur ? '✓ ' : '   ') + m,
+    () => { active.copilotModel = m; submitToPty(active.ptyId, `/model ${m}`); paintModelBtn(); },
+  ]));
+}
+
+async function pickAndOpenCopilot() {
+  const start = localStorage.getItem('cockpit.lastFolder') || 'C:\\dev';
+  const folder = await invoke('pick_folder', { startDir: start });
+  if (!folder) return;
+  localStorage.setItem('cockpit.lastFolder', folder);
+  await newSession(folder, { agent: 'copilot' });
+}
+
 // ------------------------------------------------------------------ remote control tab
 // Optional pinned tab that runs `claude remote-control` (server mode: the phone
 // or claude.ai/code can start new sessions on this PC). Its shell updates Claude
@@ -730,6 +769,7 @@ async function newSession(cwd, opts = {}) {
     tasks: [],               // { prompt, at, files:Set(norm), reviewed } — the review queue
     tree: null,              // built lazily below
     tabEl: null, lastSize: '',
+    agent: opts.agent === 'copilot' ? 'copilot' : 'claude',
     rc: !!opts.rc,           // the pinned Remote Control server tab
     rcSids: new Set(),       // sessions the phone spawned through it (hook routing)
   };
@@ -766,7 +806,8 @@ async function newSession(cwd, opts = {}) {
     ? ['-NoLogo', '-ExecutionPolicy', 'Bypass', '-EncodedCommand', encodePs(`. '${gw.init_ps1}'
 ${rcScript()}`)]
     : ['-NoLogo', '-NoExit', '-ExecutionPolicy', 'Bypass', '-Command', `. '${gw.init_ps1}'`];
-  const spawnOpts = (cmd) => ({ cmd, args, cwd, cols: s.term.cols || 100, rows: s.term.rows || 30, onOutput });
+  const env = s.agent === 'copilot' ? copilotEnv() : null;
+  const spawnOpts = (cmd) => ({ cmd, args, cwd, cols: s.term.cols || 100, rows: s.term.rows || 30, onOutput, env });
   try {
     s.ptyId = await invoke('pty_spawn', spawnOpts('pwsh.exe'));
   } catch (e1) {
@@ -799,6 +840,7 @@ ${rcScript()}`)]
   // Keep the restored id on the tab right away: persistTabs runs before the
   // first hook arrives, and saving null there would forget the conversation.
   if (sid) s.claudeSid = sid;
+  else if (s.agent === 'copilot') s.claudeSid = crypto.randomUUID();
   const resume = sid ? `--resume ${sid} ` : (opts.resume ? '--continue ' : '');
   if (!s.rc) setTimeout(() => claudeGate.then(() => {
     if (!sessions.has(s.ptyId)) return;
@@ -807,7 +849,11 @@ ${rcScript()}`)]
     // auto-generates one and then updates it to reflect the first prompt, so the
     // app shows the actual topic instead of the folder. (The local tab title
     // still tracks the live OSC topic via onTitleChange below.)
-    const launch = `claude ${resume}${launchFlags()}--remote-control`;
+    // Copilot tabs get their session id from us (a fresh uuid, or the saved one
+    // on restore) so a restored tab always reopens its own conversation.
+    const launch = s.agent === 'copilot'
+      ? `copilot --session-id ${s.claudeSid}${safeTok(copilotCfg.model) ? ` --model ${safeTok(copilotCfg.model)}` : ''}`
+      : `claude ${resume}${launchFlags()}--remote-control`;
     if (opts.setup) {
       // First run with missing prerequisites: install them right here in the
       // tab, refresh PATH so this same shell sees the new binaries, then fall
@@ -989,6 +1035,7 @@ function makeTab(s) {
   el.innerHTML = `<span class="badge"></span><span class="name">${esc(basename(s.cwd))}</span><span class="schedicon">⏱</span><button class="close" title="Close session">×</button>`;
   el.title = s.cwd;
   el.onclick = () => activate(s);
+  if (s.agent === 'copilot') { el.classList.add('copilot'); el.title = `GitHub Copilot in ${s.cwd}`; }
   if (s.rc) {
     el.classList.add('rc');
     el.querySelector('.name').textContent = '📡 Remote Control';
@@ -1089,12 +1136,13 @@ function cancelAutoCont(s) {
 // back as its own conversation. Written on open/close and again whenever a tab
 // binds a new id, so a Claude restarted mid-session is what gets restored.
 function persistTabs() {
-  const tabs = [...sessions.values()].filter((s) => !s.rc).map((s) => ({ cwd: s.cwd, sid: s.claudeSid || null }));
+  const tabs = [...sessions.values()].filter((s) => !s.rc).map((s) => ({ cwd: s.cwd, sid: s.claudeSid || null, agent: s.agent }));
   localStorage.setItem('cockpit.tabs', JSON.stringify(tabs));
   // Keep the backend session roster (for `crydeck list`) in step with the tabs.
   // Name comes from the tab title when Claude has narrated one, else the folder.
   const roster = [...sessions.values()].filter((s) => !s.rc).map((s) => ({
     id: s.ptyId,
+    agent: s.agent,
     name: (s.tabEl?.querySelector('.name')?.textContent || basename(s.cwd)).trim(),
     cwd: s.cwd,
   }));
@@ -1733,6 +1781,9 @@ function sessionForHook(j, tab) {
   // spawns for the phone). When present it beats every cwd heuristic below.
   const pinned = tab != null ? sessions.get(tab) : null;
   if (pinned) {
+    // A claude started by hand inside a Copilot tab's shell: not this tab's
+    // conversation, and binding it would overwrite the Copilot session id.
+    if (pinned.agent === 'copilot') return null;
     if (pinned.rc) { if (sid) pinned.rcSids.add(sid); return pinned; }
     if (sid && pinned.claudeSid !== sid) { pinned.claudeSid = sid; persistTabs(); }
     return pinned;
@@ -1750,7 +1801,7 @@ function sessionForHook(j, tab) {
   const rcHere = !!rc && (nc === norm(rc.cwd) || nc.startsWith(norm(rc.cwd) + '\\'));
   let best = null;
   for (const s of sessions.values()) {
-    if (s.rc || norm(s.cwd) !== nc) continue;
+    if (s.rc || s.agent === 'copilot' || norm(s.cwd) !== nc) continue;
     if (!s.claudeSid) { best = s; break; }
     if (rcHere && !(Date.now() - (s.lastInput || 0) < 15000)) continue;
     best ??= s; // all bound: claude restarted in this tab, rebind below
@@ -1778,11 +1829,11 @@ listen('cockpit-status', (ev) => {
 // `crydeck spawn <folder> [prompt]` arrives here via the gateway. Open the
 // session and, if a prompt was seeded, let newSession type it once Claude is up.
 listen('cockpit-spawn', async (ev) => {
-  let cwd, prompt;
-  try { const p = JSON.parse(ev.payload.raw); cwd = p.cwd; prompt = p.prompt; } catch { return; }
+  let cwd, prompt, agent;
+  try { const p = JSON.parse(ev.payload.raw); cwd = p.cwd; prompt = p.prompt; agent = p.agent; } catch { return; }
   if (!cwd) return;
   try {
-    const s = await newSession(cwd, { seed: prompt && prompt.trim() ? prompt.trim() : undefined });
+    const s = await newSession(cwd, { agent, seed: prompt && prompt.trim() ? prompt.trim() : undefined });
     if (s) activate(s);
     trace(`crydeck spawn at ${cwd}${prompt ? ' (seeded)' : ''}`);
   } catch (e) { trace(`crydeck spawn failed: ${e}`); }
@@ -1885,6 +1936,11 @@ function renderStatus() {
   const el = $('status');
   if (!active) { el.innerHTML = `<span class="seg">no session</span>`; return; }
   const v = active.status;
+  if (isCopilot(active)) {
+    el.classList.remove('stale');
+    el.innerHTML = `<span class="seg">◆ GitHub Copilot</span><span class="seg">model <b>${esc(active.copilotModel || copilotCfg.model || 'auto')}</b></span>${copilotCfg.host ? `<span class="seg">host <b>${esc(copilotCfg.host)}</b></span>` : ''}<span class="spacer"></span><span class="seg">${esc(basename(active.cwd))}</span>`;
+    return;
+  }
   if (!v) {
     el.classList.remove('stale');
     el.innerHTML = `<span class="seg">${esc(basename(active.cwd))}</span><span class="seg" style="color:var(--dim)">waiting for Claude status…</span><span class="spacer"></span><span class="seg">gateway :${gw.port}</span>`;
@@ -2457,17 +2513,39 @@ async function boot() {
   gw = await invoke('gateway_info');
   trace(`gateway on :${gw.port}`);
 
+  copilotCfg = { ...copilotCfg, ...(await invoke('copilot_config_get').catch(() => ({}))) };
+  const env = await invoke('env_check').catch(() => null);
+  hasCopilot = !!env?.copilot;
+
   const nt = document.createElement('button');
   nt.id = 'newtab';
   nt.textContent = '+ session';
   nt.onclick = pickAndOpen;
+  nt.title = 'New Claude session (right-click for more)';
+  nt.oncontextmenu = (ev) => {
+    ev.preventDefault();
+    const items = [['New Claude session…', pickAndOpen]];
+    if (hasCopilot) items.push(['New GitHub Copilot session…', pickAndOpenCopilot]);
+    contextMenu(ev, items);
+  };
   $('tabs').appendChild(nt);
+  if (hasCopilot) {
+    const cp = document.createElement('button');
+    cp.id = 'newcopilot';
+    cp.textContent = '+ copilot';
+    cp.title = 'New GitHub Copilot CLI session in a folder';
+    cp.onclick = pickAndOpenCopilot;
+    $('tabs').appendChild(cp);
+  }
 
   const mb = document.createElement('button');
   mb.id = 'modelbtn';
   mb.title = 'Model and effort for Claude';
   mb.textContent = modelBtnLabel();
-  mb.onclick = () => ($('modelmenu') ? $('modelmenu').remove() : showModelMenu(mb));
+  mb.onclick = (ev) => {
+    if (isCopilot(active)) { showCopilotModelMenu(ev); return; }
+    $('modelmenu') ? $('modelmenu').remove() : showModelMenu(mb);
+  };
   $('tabs').appendChild(mb);
 
   // Working-tree diff of the focused session, via Claude's own /diff review.
@@ -2510,8 +2588,9 @@ async function boot() {
     // Builds before v0.18.1 saved bare folder strings, with no session id.
     const cwd = typeof t === 'string' ? t : t?.cwd;
     const sid = typeof t === 'string' ? null : t?.sid;
+    const agent = typeof t === 'string' ? 'claude' : (t?.agent || 'claude');
     if (!cwd) continue;
-    try { await newSession(cwd, { resume: true, sid }); } catch (e) { trace(`restore ${cwd} failed: ${e}`); }
+    try { await newSession(cwd, { resume: true, sid, agent }); } catch (e) { trace(`restore ${cwd} failed: ${e}`); }
   }
   const cli = await invoke('boot_folder');
   if (cli && ![...sessions.values()].some((s) => norm(s.cwd) === norm(cli))) {
@@ -2524,7 +2603,6 @@ async function boot() {
   // First-run: if prerequisites are missing, offer to install them inside a
   // regular session tab — the tab runs winget/installer, then flows straight
   // into claude's own first-launch login. All installed → nothing to see here.
-  const env = await invoke('env_check').catch(() => null);
   trace(`env_check: git=${env ? env.git : '?'} claude=${env ? env.claude : '?'} pwsh=${env ? env.pwsh : '?'}`);
   if (env && (!env.git || !env.claude || !env.pwsh)) {
     const missing = [!env.pwsh && 'PowerShell 7', !env.git && 'Git', !env.claude && 'Claude Code'].filter(Boolean);
@@ -2593,7 +2671,12 @@ Short list of everything. For detail see the [GitHub README](https://github.com/
 **Remote & orchestration**
 - Remote Control: steer any session from your phone or the web; the app names each session after your first prompt, not the folder.
 - Remote Control tab (About card ⓘ → "Keep a Remote Control tab open"): a pinned 📡 tab runs \`claude remote-control\` so your phone can start brand-new sessions on this PC. It updates Claude Code first, then restarts itself if it ever stops. Right-click it to restart or turn it off.
-- \`crydeck\` CLI on every session: \`spawn <folder> [prompt]\`, \`list\`, \`read <id>\`, \`send <id> <text>\` — so a session can open and drive others (and you can spawn new work from your phone).
+- \`crydeck\` CLI on every session: \`spawn [--copilot] <folder> [prompt]\`, \`list\`, \`read <id>\`, \`send <id> <text>\` — so a session can open and drive others (and you can spawn new work from your phone).
+
+**GitHub Copilot**
+- \`+ copilot\` (tab bar, or right-click \`+ session\`) opens a GitHub Copilot CLI session in a folder; its tabs restore their own conversation like Claude's. The model button switches Copilot models in that tab.
+- Company GitHub Enterprise: set the host (e.g. \`company.ghe.com\`) in the About card; it applies to Copilot only, not your \`gh\` CLI.
+- Bridge (off by default, About card): any session can ask Copilot with \`crydeck consult "question"\` and gets the answer back as text. Read-only unless \`--write\`; follow up with \`--session <id>\`. Every answer is also saved under the app's \`cockpit-hooks\\consults\` folder.
 
 **Prompt library**
 - Bottom-left panel: click a title to type that prompt into the active session — you press Enter to send. Hover shows what it does.
@@ -2651,6 +2734,18 @@ async function showAbout() {
       <input type="checkbox" id="ab-rc" style="cursor:pointer">
       <span>Keep a Remote Control tab open <span style="color:#8a8a94">(<code>claude remote-control</code> in <a href="#" id="ab-rc-dir" style="color:#7aa2ff;text-decoration:none">${esc(rcCwd())}</a>; updates Claude first, restarts itself)</span></span>
     </label>
+    <div style="margin-top:12px;border-top:1px solid #2a2a32;padding-top:10px">
+      <b style="color:#aab;font-size:12px">◆ GitHub Copilot</b>
+      <span style="color:#8a8a94;font-size:11.5px">${hasCopilot ? '(Copilot CLI found)' : '(Copilot CLI not found: <code>winget install GitHub.Copilot</code>)'}</span>
+      <div style="display:flex;gap:8px;margin-top:6px;align-items:center;flex-wrap:wrap">
+        <label style="font-size:11.5px;color:#aab">Host <input id="ab-cp-host" placeholder="github.com or company.ghe.com" style="width:190px;background:#101014;border:1px solid #3a3a44;color:#ddd;border-radius:4px;padding:2px 6px"></label>
+        <label style="font-size:11.5px;color:#aab">Model <input id="ab-cp-model" placeholder="auto" style="width:120px;background:#101014;border:1px solid #3a3a44;color:#ddd;border-radius:4px;padding:2px 6px"></label>
+      </div>
+      <label style="display:flex;align-items:center;gap:8px;margin-top:6px;cursor:pointer">
+        <input type="checkbox" id="ab-cp-bridge" style="cursor:pointer">
+        <span>Let sessions consult Copilot <span style="color:#8a8a94">(<code>crydeck consult</code>; answers come back into the asking session)</span></span>
+      </label>
+    </div>
     <label style="display:flex;align-items:center;gap:8px;margin-top:8px;cursor:pointer">
       <input type="checkbox" id="ab-autorender" style="cursor:pointer">
       <span>Render HTML and PDF files automatically when selected</span>
@@ -2670,6 +2765,15 @@ async function showAbout() {
     try { asBox.checked ? await autostartEnable() : await autostartDisable(); }
     catch (e) { trace(`autostart toggle failed: ${e}`); asBox.checked = !asBox.checked; }
   };
+  const cpHost = card.querySelector('#ab-cp-host');
+  const cpModel = card.querySelector('#ab-cp-model');
+  const cpBridge = card.querySelector('#ab-cp-bridge');
+  cpHost.value = copilotCfg.host || '';
+  cpModel.value = copilotCfg.model || '';
+  cpBridge.checked = !!copilotCfg.bridge;
+  cpHost.onchange = () => saveCopilotCfg({ host: cpHost.value.trim() });
+  cpModel.onchange = () => saveCopilotCfg({ model: safeTok(cpModel.value.trim()) });
+  cpBridge.onchange = () => saveCopilotCfg({ bridge: cpBridge.checked });
   const rcBox = card.querySelector('#ab-rc');
   rcBox.checked = rcOn();
   rcBox.onchange = async () => {

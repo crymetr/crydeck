@@ -309,11 +309,13 @@ pub struct EnvCheck {
     pub git: bool,
     pub claude: bool,
     pub pwsh: bool,
+    /// GitHub Copilot CLI (optional; enables Copilot tabs).
+    pub copilot: bool,
 }
 
 #[tauri::command]
 pub fn env_check() -> EnvCheck {
-    EnvCheck { git: on_path("git"), claude: on_path("claude"), pwsh: on_path("pwsh") }
+    EnvCheck { git: on_path("git"), claude: on_path("claude"), pwsh: on_path("pwsh"), copilot: on_path("copilot") }
 }
 
 /// Where a first-run setup session lands: a real projects folder, created if
