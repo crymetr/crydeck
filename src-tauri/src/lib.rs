@@ -25,6 +25,7 @@ pub fn run() {
       pty::pty_kill,
       pty::pty_kill_all,
       pty::pty_alive,
+      fs::run_setup_window,
       consult::copilot_config_get,
       consult::copilot_config_set,
       pty::bench_report,

@@ -3,6 +3,11 @@
 All notable changes to CryDeck. Format loosely follows Keep a Changelog;
 versions are git tags.
 
+## v0.23.1 - 2026-09-28
+
+### Fixed
+- **First-run setup did nothing on a fresh PC.** Without PowerShell 7 every tab falls back to Windows PowerShell 5.1, which under ConPTY draws a dead black terminal on many machines, and the setup was typed into exactly such a tab, so it was invisible. Setup now runs in its own real console window (renders fine on 5.1), shows every step, and when PowerShell 7, Git and Claude Code are all in place it restarts CryDeck from that window, so the new instance sees the updated PATH without a manual restart. The restarted app opens a Projects tab where Claude asks you to log in. If the window can't be opened, it falls back to the old setup tab.
+
 ## v0.23.0 - 2026-09-28
 
 ### Added

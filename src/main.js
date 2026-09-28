@@ -547,12 +547,14 @@ function setupScript(launch) {
   // terminal to take effect, so say so explicitly when we just installed it.
   const finish =
     `${say('----- Setup summary -----', 'White')};` +
-    `if(Get-Command pwsh -EA SilentlyContinue){${say('PowerShell 7 OK. Restart CryDeck once so terminals use it (fixes the black screen).', 'Green')}}` +
+    `if(Get-Command pwsh -EA SilentlyContinue){${say('PowerShell 7 OK.', 'Green')}}` +
     `else{${say('PowerShell 7 is still MISSING - terminals may render black until it is installed.', 'Red')}};` +
     `if(Get-Command git -EA SilentlyContinue){${say('Git OK: ', 'Green')};git --version}` +
     `else{${say('Git is still MISSING.', 'Red')}};` +
     `if(Get-Command claude -EA SilentlyContinue){` +
-      `${say('Claude Code OK - starting it now. Log in when it asks.', 'Green')};${launch}` +
+      (launch
+        ? `${say('Claude Code OK - starting it now. Log in when it asks.', 'Green')};${launch}`
+        : `${say('Claude Code OK.', 'Green')}`) +
     `}else{` +
       `${say('Claude Code is still MISSING. Read the messages above, then close and reopen CryDeck to retry.', 'Red')}` +
     `}`;
@@ -562,7 +564,7 @@ function setupScript(launch) {
   // Enabling TLS 1.2 (not disabling validation) is the correct fix and is a
   // no-op on modern PowerShell.
   const tls = `[Net.ServicePointManager]::SecurityProtocol=[Net.SecurityProtocolType]::Tls12`;
-  const banner = say('Starting one-time setup. Watch this tab - each step reports below.', 'Cyan');
+  const banner = say('Starting one-time setup. Each step reports below.', 'Cyan');
   return `$ErrorActionPreference='Continue'; ${banner}; ${tls}; ${pwshInstall}; ${gitInstall}; ${claudeInstall}; ${claudePath}; ${refresh}; ${finish}`;
 }
 
@@ -2716,8 +2718,8 @@ async function boot() {
     const missing = [!env.pwsh && 'PowerShell 7', !env.git && 'Git', !env.claude && 'Claude Code'].filter(Boolean);
     const ok = await uiConfirm(
       `Welcome to CryDeck! One-time setup: ${missing.join(' and ')} ${missing.length > 1 ? 'are' : 'is'} not installed yet.\n\n` +
-      `Install now? It runs right here in a terminal tab and finishes by starting Claude, which asks you to log in ` +
-      `(you need a Claude account, Pro or Max plan). Approve the Windows permission popup if one appears.`,
+      `Install now? It runs in a separate window, shows each step, and restarts CryDeck when it is done. Then Claude ` +
+      `asks you to log in (you need a Claude account, Pro or Max plan). Approve the Windows permission popup if one appears.`,
       'Install');
     trace(`setup prompt: ${ok ? 'accepted' : 'declined'}`);
     if (ok) {
@@ -2728,10 +2730,25 @@ async function boot() {
       // "kaldı öyle" bug). A second Projects tab is harmless, and a fresh setup
       // tab is a clean shell that installs first instead of one already trying
       // (and failing) to launch a not-yet-installed claude.
+      // Setup runs in its own real console window, not in a tab. Without pwsh
+      // every tab is Windows PowerShell 5.1 under ConPTY, which on many
+      // machines draws a dead black terminal, so a setup typed into a tab
+      // was invisible ("nothing happens"). A plain console renders fine, and
+      // when everything is installed it restarts CryDeck with the new PATH
+      // (a running app keeps the PATH it started with).
       try {
-        const ss = await newSession(dir, { setup: { git: !env.git, claude: !env.claude } });
-        trace(`setup session started: ${ss ? ss.ptyId : 'null'} at ${dir}`);
-      } catch (e) { trace(`setup session failed: ${e}`); }
+        await invoke('run_setup_window', { script: setupScript(null) });
+        trace('setup window started');
+        // The restarted app opens its first tab here and Claude asks to log in.
+        localStorage.setItem('cockpit.tabs', JSON.stringify([{ cwd: dir, sid: null, agent: 'claude' }]));
+        uiConfirm('Setup is running in a separate window. Follow it there; CryDeck restarts itself when everything is installed.', 'OK');
+      } catch (e) {
+        trace(`setup window failed (${e}), falling back to a setup tab`);
+        try {
+          const ss = await newSession(dir, { setup: { git: !env.git, claude: !env.claude } });
+          trace(`setup session started: ${ss ? ss.ptyId : 'null'} at ${dir}`);
+        } catch (e2) { trace(`setup session failed: ${e2}`); }
+      }
     }
   }
 

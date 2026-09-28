@@ -318,6 +318,46 @@ pub fn env_check() -> EnvCheck {
     EnvCheck { git: on_path("git"), claude: on_path("claude"), pwsh: on_path("pwsh"), copilot: on_path("copilot") }
 }
 
+/// First-run setup in a real, visible console window (not a ConPTY tab: 5.1
+/// under ConPTY can render nothing). The window runs the frontend's install
+/// script, then, if PowerShell 7, Git and Claude Code all resolve, stops this
+/// CryDeck and starts it again from that console so the new instance inherits
+/// the refreshed PATH.
+#[tauri::command]
+pub fn run_setup_window(script: String) -> Result<(), String> {
+    let pid = std::process::id();
+    let exe = std::env::current_exe().map_err(|e| e.to_string())?;
+    let exe_s = exe.to_string_lossy().replace('\'', "''");
+    let tail = format!(
+        r#"
+if ((Get-Command pwsh -EA SilentlyContinue) -and (Get-Command git -EA SilentlyContinue) -and (Get-Command claude -EA SilentlyContinue)) {{
+  Write-Host '[CryDeck] All set. Restarting CryDeck in 5 seconds...' -f Green
+  Start-Sleep 5
+  Stop-Process -Id {pid} -Force -ErrorAction SilentlyContinue
+  Start-Sleep 2
+  Start-Process -FilePath '{exe_s}'
+  Write-Host '[CryDeck] CryDeck restarted. You can close this window.' -f Green
+}} else {{
+  Write-Host '[CryDeck] Something is still missing (see above). Fix it, then reopen CryDeck to try again.' -f Red
+}}
+"#
+    );
+    let path = std::env::temp_dir().join("crydeck-setup.ps1");
+    // BOM so Windows PowerShell 5.1 reads the file as UTF-8.
+    let mut bytes = vec![0xEF, 0xBB, 0xBF];
+    bytes.extend_from_slice(format!("{script}
+{tail}").as_bytes());
+    std::fs::write(&path, bytes).map_err(|e| e.to_string())?;
+    const CREATE_NEW_CONSOLE: u32 = 0x0000_0010;
+    std::process::Command::new("powershell.exe")
+        .args(["-NoExit", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File"])
+        .arg(&path)
+        .creation_flags(CREATE_NEW_CONSOLE)
+        .spawn()
+        .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
 /// Where a first-run setup session lands: a real projects folder, created if
 /// needed, so Claude works somewhere sane from day one instead of the profile
 /// root.
