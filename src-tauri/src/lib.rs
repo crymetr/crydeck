@@ -7,7 +7,31 @@ mod watch;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-  tauri::Builder::default()
+  let builder = tauri::Builder::default();
+  // Must be the first plugin. A second CryDeck would bind the next gateway port
+  // and rewrite gateway.json + the hook commands in ~/.claude/settings.json to
+  // itself; once it closed, the CLI and the status/tool/prompt hooks pointed at
+  // a dead port. Now the second launch hands its folder argument to the running
+  // window and exits. Release builds only, so `tauri dev` still starts while
+  // the installed CryDeck is open.
+  #[cfg(not(debug_assertions))]
+  let builder = builder.plugin(tauri_plugin_single_instance::init(|app, argv, cwd| {
+    use tauri::{Emitter, Manager};
+    if let Some(w) = app.get_webview_window("main") {
+      let _ = w.unminimize();
+      let _ = w.show();
+      let _ = w.set_focus();
+    }
+    let dir = argv
+      .get(1)
+      .map(|a| std::path::Path::new(&cwd).join(a))
+      .filter(|p| p.is_dir())
+      .map(|p| p.to_string_lossy().to_string());
+    if let Some(d) = dir {
+      let _ = app.emit("cockpit-open", d);
+    }
+  }));
+  builder
     .plugin(tauri_plugin_updater::Builder::new().build())
     .plugin(tauri_plugin_process::init())
     // Start-with-Windows. The frontend enables this by default on first run and

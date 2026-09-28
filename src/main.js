@@ -1865,6 +1865,17 @@ listen('cockpit-spawn', async (ev) => {
   } catch (e) { trace(`crydeck spawn failed: ${e}`); }
 });
 
+// A second `crydeck.exe <folder>` launch lands here (single-instance): jump to
+// a tab already on that folder, or open one.
+listen('cockpit-open', async (ev) => {
+  const cwd = ev.payload;
+  if (!cwd) return;
+  const hit = [...sessions.values()].find((s) => !s.rc && norm(s.cwd) === norm(cwd));
+  if (hit) { activate(hit); return; }
+  try { const s = await newSession(cwd); if (s) activate(s); }
+  catch (e) { trace(`open from second launch failed: ${e}`); }
+});
+
 listen('cockpit-tool', (ev) => {
   let j;
   try { j = JSON.parse(ev.payload.raw); } catch { return; }

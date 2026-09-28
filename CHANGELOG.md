@@ -3,6 +3,11 @@
 All notable changes to CryDeck. Format loosely follows Keep a Changelog;
 versions are git tags.
 
+## v0.23.3 - 2026-09-29
+
+### Fixed
+- **Opening CryDeck a second time broke the first one.** The second copy took over the hook address in Claude's settings and the `crydeck` command, then closed and left them pointing nowhere: the status bar went quiet and `crydeck list/read/send` failed. Now only one CryDeck runs. Launching it again brings the open window to the front, and `crydeck.exe <folder>` opens that folder as a tab there (or jumps to the tab already on it).
+
 ## v0.23.2 - 2026-09-29
 
 ### Fixed
