@@ -3,6 +3,11 @@
 All notable changes to CryDeck. Format loosely follows Keep a Changelog;
 versions are git tags.
 
+## v0.23.2 - 2026-09-29
+
+### Fixed
+- **Remote Control tab stayed blank and never connected.** A new terminal first asks for the cursor position and holds the shell until it gets an answer. CryDeck started listening for that answer a moment too late, so it was lost. Tabs you look at recovered on the first resize, but the Remote Control tab opens in the background and waited forever. The answer is now caught from the first byte, so every tab (and the Remote Control server) starts right away.
+
 ## v0.23.1 - 2026-09-28
 
 ### Fixed

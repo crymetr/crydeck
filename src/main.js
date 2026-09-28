@@ -812,19 +812,29 @@ ${rcScript()}`)]
     : ['-NoLogo', '-NoExit', '-ExecutionPolicy', 'Bypass', '-Command', `. '${gw.init_ps1}'`];
   const env = s.agent === 'copilot' ? copilotEnv() : null;
   const spawnOpts = (cmd) => ({ cmd, args, cwd, cols: s.term.cols || 100, rows: s.term.rows || 30, onOutput, env });
-  try {
-    s.ptyId = await invoke('pty_spawn', spawnOpts('pwsh.exe'));
-  } catch (e1) {
-    trace(`pwsh spawn failed (${e1}), falling back to powershell`);
-    s.ptyId = await invoke('pty_spawn', spawnOpts('powershell.exe'));
-  }
-  sessions.set(s.ptyId, s);
 
+  // Wired BEFORE the spawn: ConPTY (conhost --inheritcursor) opens by asking
+  // the terminal for the cursor position (ESC[6n) and holds the shell until
+  // xterm answers. That question can arrive before pty_spawn resolves; with the
+  // listener attached afterwards the answer was dropped, and a tab that never
+  // gets resized (the background RC tab) sat forever on a dead shell. Replies
+  // made before the id exists are queued and flushed right after the spawn.
+  const early = [];
   s.term.onData((d) => {
+    if (s.ptyId == null) { early.push(d); return; }
     s.lastInput = Date.now();
     const g = guardData(d);
     if (g !== null) invoke('pty_write', { id: s.ptyId, data: g });
   });
+  try {
+    s.ptyId = await invoke('pty_spawn', spawnOpts('pwsh.exe'));
+  } catch (e1) {
+    trace(`pwsh spawn failed (${e1}), falling back to powershell`);
+    early.length = 0;
+    s.ptyId = await invoke('pty_spawn', spawnOpts('powershell.exe'));
+  }
+  sessions.set(s.ptyId, s);
+  if (early.length) invoke('pty_write', { id: s.ptyId, data: early.join('') });
   wireClipboard(s.term, s.box);
   // Clicking either pane in a split moves focus (tree/preview/model follow it).
   s.box.addEventListener('mousedown', () => { if (inPanes(s) && active !== s) focusPane(s); }, true);
