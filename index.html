@@ -40,6 +40,12 @@
   .tab.attn .badge { display: inline-block; background: var(--changed); }
   #newcopilot { margin-left: 4px; }
   .tab.copilot .name::before { content: "◆ "; color: #a78bfa; }
+  .endedbar { position: absolute; right: 18px; bottom: 14px; z-index: 5; display: flex; gap: 8px; align-items: center;
+    background: #1b1b22; border: 1px solid #3a3a44; border-radius: 8px; padding: 8px 10px; font: 12px system-ui; color: #d8d8de;
+    box-shadow: 0 6px 20px rgba(0,0,0,.45); }
+  .endedbar button { background: #22222a; border: 1px solid #3a3a44; border-radius: 5px; color: #ddd; padding: 3px 10px; cursor: pointer; font: inherit; }
+  .endedbar button[data-a="resume"] { border-color: var(--accent); color: #fff; }
+  .tab.ended .name { opacity: .6; font-style: italic; }
   .tab.rc { border-color: #2c3a5c; color: #9db4ff; }
   .tab.rc .name { font-weight: 600; }
   /* Claude rang for you (permission / waiting): red, pulsing, most urgent. */

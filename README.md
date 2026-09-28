@@ -113,9 +113,10 @@ is the entire reason it stays light (~250MB working set, single small binary).
 
 ## How the hook wiring works (please read before installing)
 
-On first launch CryDeck merges three entries into `~/.claude/settings.json`:
-a `statusLine` command, a `PostToolUse` hook, and a `UserPromptSubmit` hook
-(the review queue's task boundaries). Each is a single direct
+On first launch CryDeck merges its entries into `~/.claude/settings.json`:
+a `statusLine` command, a `PostToolUse` hook, a `UserPromptSubmit` hook
+(the review queue's task boundaries), and `SessionStart` / `Notification` /
+`Stop` / `SessionEnd` hooks (tab state: working, done, waiting on you, exited). Each is a single direct
 `curl.exe` call to a loopback-only gateway (fixed port range 48620-48639,
 per-install token). Your original settings file is backed up once as
 `settings.json.pre-cockpit`; an existing statusLine you wrote yourself is

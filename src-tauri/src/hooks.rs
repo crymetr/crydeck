@@ -86,6 +86,15 @@ pub fn start(app: AppHandle) -> Result<Gateway, String> {
                     let _ = app.emit("cockpit-tool", HookEvent { raw: body, tab });
                     let _ = req.respond(resp(200, ""));
                 }
+                // Lifecycle hooks (SessionStart, Notification, Stop, SessionEnd)
+                // share one route; the payload's hook_event_name tells them
+                // apart. The body we answer MUST stay empty: SessionStart's
+                // stdout is added to Claude's context.
+                "/event" => {
+                    gwlog(&format!("event {}B", body.len()));
+                    let _ = app.emit("cockpit-event", HookEvent { raw: body, tab });
+                    let _ = req.respond(resp(200, ""));
+                }
                 "/prompt" => {
                     gwlog(&format!("prompt {}B", body.len()));
                     let _ = app.emit("cockpit-prompt", HookEvent { raw: body, tab });
@@ -233,7 +242,8 @@ fn is_ours(cmd: &str) -> bool {
         || (cmd.contains("127.0.0.1")
             && (cmd.contains("/status?token=")
                 || cmd.contains("/tool?token=")
-                || cmd.contains("/prompt?token=")))
+                || cmd.contains("/prompt?token=")
+                || cmd.contains("/event?token=")))
 }
 
 /// Merge statusLine + PostToolUse into ~/.claude/settings.json. Rules: back up
@@ -257,6 +267,7 @@ fn install_user_settings(port: u16, token: &str) -> Result<(), String> {
     let status_cmd = hook_cmd(port, token, "status");
     let tool_cmd = hook_cmd(port, token, "tool");
     let prompt_cmd = hook_cmd(port, token, "prompt");
+    let event_cmd = hook_cmd(port, token, "event");
     let mut changed = false;
 
     let cur_status = v
@@ -285,19 +296,29 @@ fn install_user_settings(port: u16, token: &str) -> Result<(), String> {
             .entry(event)
             .or_insert_with(|| serde_json::json!([]));
         if let Some(a) = arr.as_array_mut() {
+            // Strip only our own stale commands (old port/token/route) out of
+            // each entry, so a user command grouped in the same entry survives;
+            // an entry left with no commands at all is dropped.
+            //
+            // "Stale" is scoped to this event's route: /event and /tool both
+            // live under PostToolUse, and each ensure() must not delete the other.
+            let route = cmd.split("/127.0.0.1:").nth(1).and_then(|r| r.split('/').nth(1)).and_then(|r| r.split('?').next()).unwrap_or("");
+            let same_route = |c: &str| route.is_empty() || c.contains("cockpit-hooks") || c.contains(&format!("/{route}?token="));
+            for e in a.iter_mut() {
+                if let Some(hs) = e.get_mut("hooks").and_then(|h| h.as_array_mut()) {
+                    let n = hs.len();
+                    hs.retain(|h| {
+                        !h.pointer("/command")
+                            .and_then(|c| c.as_str())
+                            .map(|c| is_ours(c) && same_route(c) && c != cmd)
+                            .unwrap_or(false)
+                    });
+                    changed |= hs.len() != n;
+                }
+            }
             let before = a.len();
             a.retain(|e| {
-                !e.pointer("/hooks")
-                    .and_then(|h| h.as_array())
-                    .map(|hs| {
-                        hs.iter().any(|h| {
-                            h.pointer("/command")
-                                .and_then(|c| c.as_str())
-                                .map(|c| is_ours(c) && c != cmd)
-                                .unwrap_or(false)
-                        })
-                    })
-                    .unwrap_or(false)
+                e.pointer("/hooks").and_then(|h| h.as_array()).map(|hs| !hs.is_empty()).unwrap_or(true)
             });
             changed |= a.len() != before;
             let present = a.iter().any(|e| {
@@ -322,6 +343,10 @@ fn install_user_settings(port: u16, token: &str) -> Result<(), String> {
     };
     ensure("PostToolUse", Some("Edit|Write|MultiEdit|NotebookEdit"), &tool_cmd);
     ensure("UserPromptSubmit", None, &prompt_cmd);
+    // Authoritative tab state instead of guessing from terminal output.
+    for ev in ["SessionStart", "Notification", "Stop", "SessionEnd", "PostToolUse"] {
+        ensure(ev, None, &event_cmd);
+    }
 
     if changed {
         std::fs::write(&file, serde_json::to_string_pretty(&v).unwrap())

@@ -3,6 +3,19 @@
 All notable changes to CryDeck. Format loosely follows Keep a Changelog;
 versions are git tags.
 
+## v0.23.0 - 2026-09-28
+
+### Added
+- **Tab state from Claude's own lifecycle hooks.** CryDeck now installs `SessionStart`, `Notification`, `Stop` and `SessionEnd` hooks (same single-line curl, one `/event` route). For tabs that send them, the dot no longer guesses from terminal output: blue when a prompt or tool runs, amber when the turn ends (`Stop`), red only for a real permission prompt or question (`Notification`). The status bar and tab tooltip say what Claude is waiting for, and the desktop notification carries the reason.
+- **Resume after exit.** If claude exits inside a tab (Ctrl+C twice, `/exit`, a crash), a bar offers **Resume** (same conversation) or **New conversation** instead of leaving a bare prompt.
+- The session id is bound at `SessionStart`, so a restored or restarted tab is linked to its conversation before the first status line.
+
+### Notes
+- Tabs whose Claude does not send the new hooks (older settings, other shells) keep the old output-based badges.
+- Updating hook entries now strips only CryDeck's own stale commands, so a user hook grouped in the same entry is kept.
+
+(Diff reviewed by GPT-6 Astra, 6 findings fixed: session-id validation before binding, events from closed tabs dropped, badges kept across tab switches, approvals clear the red state, no double notification per turn, safe settings merge.)
+
 ## v0.22.0 - 2026-09-28
 
 ### Added

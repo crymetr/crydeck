@@ -790,7 +790,9 @@ async function newSession(cwd, opts = {}) {
     // A BEL means blocked and wins over plain output in the same chunk; any
     // other output means working (Claude resumed), clearing done/blocked.
     s.lastOut = Date.now();
-    if (s !== active && s.tabEl && !s.rc) {
+    // Tabs whose Claude sends lifecycle hooks (s.hooked) get their badge from
+    // those events instead (see cockpit-event); output is only a fallback.
+    if (s !== active && s.tabEl && !s.rc && !s.hooked) {
       if (text.includes('\x07')) {
         s.tabEl.classList.remove('busy', 'attn');
         s.tabEl.classList.add('blocked');
@@ -993,7 +995,14 @@ function renderPanes() {
     o.box.style.borderLeft = idx === 1 ? '1px solid var(--line)' : '';
     o.tabEl?.classList.toggle('active', vis);
     o.tabEl?.classList.toggle('focused', o === s);
-    if (o === s) { o.tabEl?.classList.remove('busy', 'attn', 'blocked'); o.notified = false; }
+    if (o === s) {
+      o.tabEl?.classList.remove('busy', 'attn', 'blocked');
+      o.notified = false;
+      if (o.hookState === 'attn') o.hookState = null;   // seen = no longer "done, unread"
+    } else if (o.hooked && o.hookState && o.tabEl && !o.tabEl.classList.contains(o.hookState)) {
+      o.tabEl.classList.remove('busy', 'attn', 'blocked');
+      o.tabEl.classList.add(o.hookState);
+    }
     o.tree.el.style.display = o === s ? '' : 'none';
     if (o !== s) invoke('preview_visible', { tab: o.ptyId, visible: false, rect: null }).catch(() => {});
   }
@@ -1775,11 +1784,16 @@ function scanUrls(s, raw) {
 // (preferring an unbound tab, so two tabs on one folder still separate);
 // everything after routes by session_id alone.
 function sessionForHook(j, tab) {
-  const sid = j.session_id;
+  // The id ends up on a typed command line (restore, Resume), so only a plain
+  // uuid-shaped token is ever bound to a tab.
+  const sid = /^[A-Za-z0-9-]{8,64}$/.test(j.session_id || '') ? j.session_id : null;
   // Exact route: the hook command passes $COCKPIT_TAB_ID, which every Claude
   // inherits from its tab's shell (including sessions the Remote Control tab
   // spawns for the phone). When present it beats every cwd heuristic below.
   const pinned = tab != null ? sessions.get(tab) : null;
+  // The tab it came from is gone (closed, or an extra shell): drop the event
+  // rather than guessing by folder and rebinding some other tab.
+  if (tab != null && !pinned) return null;
   if (pinned) {
     // A claude started by hand inside a Copilot tab's shell: not this tab's
     // conversation, and binding it would overwrite the Copilot session id.
@@ -1867,6 +1881,7 @@ listen('cockpit-prompt', (ev) => {
   let j; try { j = JSON.parse(ev.payload.raw); } catch { return; }
   const s = sessionForHook(j, ev.payload.tab);
   if (!s || !j.prompt) return;
+  if (s.hooked) { s.waitWhy = null; setBadge(s, 'busy'); if (s === active) renderStatus(); }
   s.tasks.unshift({ prompt: String(j.prompt).slice(0, 300), at: Date.now(), files: new Map(), reviewed: false });
   if (s.tasks.length > 100) s.tasks.pop();
   reviewChanged(s);
@@ -1960,6 +1975,7 @@ function renderStatus() {
   if (wk) seg.push(`<span class="seg">week <b>${wk}</b></span>`);
   if (v.cost?.total_cost_usd != null) seg.push(`<span class="seg">cost <b>$${v.cost.total_cost_usd.toFixed(2)}</b></span>`);
   seg.push(`<span class="spacer"></span>`);
+  if (active.waitWhy) seg.push(`<span class="seg warn">waiting: ${esc(active.waitWhy)}</span>`);
   if (active.autoCont) seg.push(`<span class="seg warn">⏱ continue ${esc(fmtIn(active.autoCont.at))}</span>`);
   seg.push(`<span class="seg">${esc(basename(active.cwd))}</span>`);
   el.innerHTML = seg.join('');
@@ -1970,7 +1986,7 @@ setInterval(renderStatus, 15000);
 // Busy -> attention when a background session's output has been quiet for 3s.
 setInterval(() => {
   for (const s of sessions.values()) {
-    if (s === active || !s.tabEl) continue;
+    if (s === active || !s.tabEl || s.hooked) continue;
     if (s.tabEl.classList.contains('busy') && Date.now() - (s.lastOut || 0) > 3000) {
       s.tabEl.classList.remove('busy');
       s.tabEl.classList.add('attn');
@@ -1984,11 +2000,103 @@ setInterval(() => {
 // so the next quiet period notifies again. Permission is requested lazily.
 let notifyOk = false;
 isPermissionGranted().then(async (g) => { notifyOk = g || (await requestPermission()) === 'granted'; }).catch(() => {});
-function notifyAttn(s) {
+function notifyAttn(s, why) {
   if (!notifyOk || s.notified) return;
   s.notified = true;
   const name = (s.tabEl?.querySelector('.name')?.textContent || basename(s.cwd)).trim();
-  try { sendNotification({ title: 'CryDeck', body: `${name} needs you` }); } catch {}
+  try { sendNotification({ title: 'CryDeck', body: why ? `${name}: ${why}` : `${name} needs you` }); } catch {}
+}
+
+// Badge a background tab from a hook: 'busy' working, 'attn' done, 'blocked'
+// waiting on you. The focused tab never carries a badge.
+// The state is kept on the session (s.hookState) so a tab you switch away from
+// shows it again; the class is only painted while the tab is in the background.
+function setBadge(s, state, why, silent = false) {
+  if (!s?.tabEl) return;
+  s.hookState = state || null;
+  s.tabEl.classList.remove('busy', 'attn', 'blocked');
+  if (state === 'busy') s.notified = false;    // new work: the next stop may notify again
+  if (s === active || !state) return;
+  s.tabEl.classList.add(state);
+  if (!silent && (state === 'blocked' || state === 'attn')) notifyAttn(s, why);
+}
+
+// ------------------------------------------------------------------ lifecycle hooks
+// SessionStart binds the session id the moment Claude starts (restore no
+// longer waits for a first status line). Notification says why Claude waits,
+// Stop says a turn finished, SessionEnd says claude exited inside the tab:
+// then the tab offers a one-click resume instead of sitting at a bare prompt.
+listen('cockpit-event', (ev) => {
+  let j; try { j = JSON.parse(ev.payload.raw); } catch { return; }
+  const kind = j.hook_event_name;
+  // Subagent start/end must not rebind or "end" the tab's main session.
+  if (j.agent_id && (kind === 'SessionStart' || kind === 'SessionEnd')) return;
+  const s = sessionForHook(j, ev.payload.tab);
+  if (!s || s.rc || s.agent === 'copilot') return;
+  s.hooked = true;
+  if (kind === 'SessionStart') {
+    hideEnded(s);
+    s.waitWhy = null;
+    s.hookState = null;
+  } else if (kind === 'Notification') {
+    // Blocking types turn the tab red with a reason; idle_prompt (the nudge
+    // after a finished turn) is "done"; the rest (auth, quota, elicitation
+    // bookkeeping) change nothing.
+    const BLOCKING = {
+      permission_prompt: 'permission needed',
+      elicitation_dialog: 'question for you',
+      elicitation_url_dialog: 'needs you in the browser',
+      agent_needs_input: 'a subagent needs input',
+    };
+    const type = j.notification_type || '';
+    const msg = String(j.message || BLOCKING[type] || '').slice(0, 160);
+    if (BLOCKING[type] || (!type && msg)) {
+      s.waitWhy = msg || 'needs you';
+      setBadge(s, 'blocked', s.waitWhy);
+    } else if (type === 'idle_prompt') {
+      // Stop already notified for this turn; the idle nudge only repaints.
+      s.waitWhy = null;
+      if (s.hookState !== 'blocked') setBadge(s, 'attn', null, true);
+    } else return;
+  } else if (kind === 'PostToolUse') {
+    // A tool ran, so any permission prompt was answered: working again.
+    s.waitWhy = null;
+    if (s.hookState !== 'busy') setBadge(s, 'busy');
+  } else if (kind === 'Stop') {
+    s.waitWhy = null;
+    setBadge(s, 'attn', 'finished');
+  } else if (kind === 'SessionEnd') {
+    // /clear and /resume end one session and start the next in the same process.
+    if (j.reason === 'clear' || j.reason === 'resume') return;
+    showEnded(s, j.session_id);
+  }
+  if (s.tabEl) s.tabEl.title = s.waitWhy ? `${s.cwd}\nWaiting: ${s.waitWhy}` : s.cwd;
+  if (s === active) renderStatus();
+});
+
+function hideEnded(s) {
+  s.endedEl?.remove();
+  s.endedEl = null;
+  s.tabEl?.classList.remove('ended');
+}
+
+function showEnded(s, sid) {
+  hideEnded(s);
+  const id = /^[A-Za-z0-9-]{8,64}$/.test(sid || '') ? sid : (s.claudeSid || '');
+  const bar = document.createElement('div');
+  bar.className = 'endedbar';
+  bar.innerHTML = `<span>Claude exited in this tab.</span><button data-a="resume">Resume</button><button data-a="new">New conversation</button><button data-a="x" title="Keep the plain shell">×</button>`;
+  bar.onclick = (e) => {
+    const a = e.target?.dataset?.a;
+    if (!a) return;
+    hideEnded(s);
+    if (a === 'resume' && id) submitToPty(s.ptyId, `claude --resume ${id} ${launchFlags()}--remote-control`);
+    else if (a === 'new') submitToPty(s.ptyId, `claude ${launchFlags()}--remote-control`);
+    s.term.focus();
+  };
+  s.box.appendChild(bar);
+  s.endedEl = bar;
+  s.tabEl?.classList.add('ended');
 }
 
 /* ---------- command palette: files / search / prompts ---------- */
@@ -2653,7 +2761,8 @@ Short list of everything. For detail see the [GitHub README](https://github.com/
 - New version while you work: an amber ↑ pill appears in the tab bar (checked every 10 minutes, no popup). Click it when you are ready — installing restarts CryDeck.
 
 **Know what each session is doing**
-- Tab dot: blue working, amber done, red waiting on you, none idle.
+- Tab dot: blue working, amber done, red waiting on you, none idle. Driven by Claude's own lifecycle hooks, so "red" means a real permission prompt or question; hover the tab (or look at the status bar) to see what it is asking.
+- Claude exited inside a tab? A bar offers Resume (same conversation) or a new one.
 - Desktop notification when a background session finishes or needs you.
 - Status bar: model, effort, context %, rate limits, session cost.
 - Model & effort picker (top right): switches the active session right away and every new one after it, or only this tab ("this session only"). Type any model id into the custom row.
